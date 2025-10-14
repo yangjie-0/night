@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "IC2WohO2sfk=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\yang.jie.tw\\Documents\\ProductDataIngestion\\ProductDataIngestion.Core\\ProductDataIngestion.Core.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\yang.jie.tw\\.nuget\\packages\\csvhelper\\33.1.0\\csvhelper.33.1.0.nupkg.sha512"
+  ],
+  "logs": []
+}
