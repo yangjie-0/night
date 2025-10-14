@@ -1,10 +1,13 @@
 {
   "version": 2,
-  "dgSpecHash": "IC2WohO2sfk=",
+  "dgSpecHash": "CgxGupP7Q9Q=",
   "success": true,
-  "projectFilePath": "C:\\Users\\yang.jie.tw\\Documents\\ProductDataIngestion\\ProductDataIngestion.Core\\ProductDataIngestion.Core.csproj",
+  "projectFilePath": "C:\\Users\\shi.junshu\\Code\\ImportPoc\\ProductDataIngestion.Core\\ProductDataIngestion.Core.csproj",
   "expectedPackageFiles": [
-    "C:\\Users\\yang.jie.tw\\.nuget\\packages\\csvhelper\\33.1.0\\csvhelper.33.1.0.nupkg.sha512"
+    "C:\\Users\\shi.junshu\\.nuget\\packages\\csvhelper\\33.1.0\\csvhelper.33.1.0.nupkg.sha512",
+    "C:\\Users\\shi.junshu\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.12\\microsoft.netcore.app.ref.8.0.12.nupkg.sha512",
+    "C:\\Users\\shi.junshu\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.12\\microsoft.windowsdesktop.app.ref.8.0.12.nupkg.sha512",
+    "C:\\Users\\shi.junshu\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.12\\microsoft.aspnetcore.app.ref.8.0.12.nupkg.sha512"
   ],
   "logs": []
 }
