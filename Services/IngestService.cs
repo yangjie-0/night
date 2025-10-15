@@ -13,23 +13,22 @@ namespace ProductDataIngestion.Services
         private readonly List<RecordError> _recordErrors = new();
 
         // 模拟数据库中的导入设置(实际应从数据库读取)
-// 模拟数据库中的导入设置(实际应从数据库读取)
-private MDataImportSetting GetImportSetting(string groupCompanyCd, string targetEntity)
-{
-    // 这里返回模拟数据,实际应该从数据库查询
-    return new MDataImportSetting
-    {
-        ProfileId = 1,
-        UsageNm = "KM-PRODUCT",
-        GroupCompanyCd = groupCompanyCd,
-        TargetEntity = targetEntity,
-        CharacterCd = "UTF-8",
-        Delimiter = ",",
-        HeaderRowIndex = 1,  // 表头行号
-        SkipRows = "3,6,9",  // 跳过行号，用逗号分隔
-        IsActive = true
-    };
-}
+        private MDataImportSetting GetImportSetting(string groupCompanyCd, string targetEntity)
+        {
+            // 这里返回模拟数据,实际应该从数据库查询
+            return new MDataImportSetting
+            {
+                ProfileId = 1,
+                UsageNm = "KM-PRODUCT",
+                GroupCompanyCd = groupCompanyCd,
+                TargetEntity = targetEntity,
+                CharacterCd = "UTF-8",
+                Delimiter = ",",
+                HeaderRowIndex = 1,  // 表头行号
+                SkipRows = "3,6,9",  // 跳过行号，用逗号分隔
+                IsActive = true
+            };
+        }
 
         // 模拟数据库中的导入详细规则(实际应从数据库读取)
         private List<MDataImportD> GetImportDetails(long profileId)
