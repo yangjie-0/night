@@ -294,36 +294,3 @@ CREATE INDEX idx_temp_product_batch_id ON temp_product_parsed(batch_id);
 CREATE INDEX idx_temp_product_step_status ON temp_product_parsed(step_status);
 CREATE INDEX idx_cl_product_attr_temp_row_id ON cl_product_attr(temp_row_id);
 CREATE INDEX idx_cl_product_attr_attr_cd ON cl_product_attr(attr_cd);
-
--- batch_runテーブル作成/10/15 yang
-CREATE TABLE batch_run (
-    batch_id TEXT PRIMARY KEY,
-    idem_key TEXT,
-    s3_bucket TEXT,
-    etag TEXT,
-    group_company_cd TEXT NOT NULL,
-    data_kind TEXT NOT NULL,
-    file_key TEXT,
-    batch_status TEXT NOT NULL DEFAULT 'RUNNING',
-    counts_json JSONB NOT NULL DEFAULT '{}',
-    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ended_at TIMESTAMPTZ,
-    cre_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    upd_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- コメント追加
-COMMENT ON TABLE batch_run IS 'バッチ実行管理テーブル';
-COMMENT ON COLUMN batch_run.batch_id IS 'バッチID';
-COMMENT ON COLUMN batch_run.idem_key IS '冪等キー';
-COMMENT ON COLUMN batch_run.s3_bucket IS 'S3バケット名';
-COMMENT ON COLUMN batch_run.etag IS 'Etag';
-COMMENT ON COLUMN batch_run.group_company_cd IS 'GP会社コード';
-COMMENT ON COLUMN batch_run.data_kind IS 'データ種別';
-COMMENT ON COLUMN batch_run.file_key IS 'ファイルキー';
-COMMENT ON COLUMN batch_run.batch_status IS 'バッチ状態';
-COMMENT ON COLUMN batch_run.counts_json IS '処理件数情報';
-COMMENT ON COLUMN batch_run.started_at IS '開始日時';
-COMMENT ON COLUMN batch_run.ended_at IS '終了日時';
-COMMENT ON COLUMN batch_run.cre_at IS '登録日時';
-COMMENT ON COLUMN batch_run.upd_at IS '更新日時';
