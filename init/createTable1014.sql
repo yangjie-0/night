@@ -327,3 +327,6 @@ COMMENT ON COLUMN batch_run.started_at IS '開始日時';
 COMMENT ON COLUMN batch_run.ended_at IS '終了日時';
 COMMENT ON COLUMN batch_run.cre_at IS '登録日時';
 COMMENT ON COLUMN batch_run.upd_at IS '更新日時';
+
+
+
