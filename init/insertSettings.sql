@@ -4,8 +4,8 @@ INSERT INTO m_data_import_setting (
     character_cd, delimiter, header_row_index, skip_row_count, is_active,
     cre_at, upd_at
 ) VALUES 
-(1, 'KM-PROCUDT', 'KM', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp),
-(2, 'RKE-PROCUDT', 'RKE', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp);
+(1, 'KM-PRODUCT', 'KM', 'PRODUCT', 'UTF-8', ',', 1, 768, true, current_timestamp, current_timestamp),
+(2, 'RKE-PRODUCT', 'RKE', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp);
 
 -- m_fixed_to_attr_map テーブルへのデータ挿入
 INSERT INTO m_fixed_to_attr_map 

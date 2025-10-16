@@ -1,18 +1,14 @@
-using System;
-using System.Collections.Generic;
-
 namespace ProductDataIngestion.Models
 {
     public class IngestManifest
     {
-        public string BatchId { get; set; }
-        public string S3Bucket { get; set; }
-        public string ObjectKey { get; set; }
-        public string Etag { get; set; }
-        public long ObjectSize { get; set; }
+        public string BatchId { get; set; } = string.Empty;
+        public string S3Bucket { get; set; } = string.Empty;
+        public string ObjectKey { get; set; } = string.Empty;
+        public string ETag { get; set; } = string.Empty;
         public int RowCount { get; set; }
-        public Dictionary<string, object> MetaJson { get; set; } = new Dictionary<string, object>();
-        public DateTime CreAt { get; set; } = DateTime.UtcNow;
-        public DateTime UpdAt { get; set; } = DateTime.UtcNow;
+        public string MetaJson { get; set; } = "{}";
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     }
 }

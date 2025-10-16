@@ -12,8 +12,8 @@ class Program
         try
         {
             // CSV文件路径(请修改为您的实际文件路径)
-            string csvFilePath = @"C:\Users\yang.jie.tw\Documents\ProductDataIngestion\sample_products.csv";
-            
+            string csvFilePath = @"C:\Users\yang.jie.tw\Documents\ProductDataIngestion\KM商品データ追加ROLEX.csv";
+
             // 检查文件是否存在
             if (!File.Exists(csvFilePath))
             {
@@ -26,11 +26,14 @@ class Program
                 return;
             }
 
+            // 数据库连接字符串 - 根据您的docker-compose配置
+            string connectionString = "Host=localhost;Port=25432;Database=purchase_system;Username=postgres;Password=user";
+
             // GP会社コード
             string groupCompanyCd = "KM";
 
-            // 取込サービスのインスタンス作成
-            var ingestService = new IngestService();
+            // 取込サービスのインスタンス作成 - 传入连接字符串
+            var ingestService = new IngestService(connectionString);
 
             // CSV取込処理実行
             string batchId = await ingestService.ProcessCsvFileAsync(csvFilePath, groupCompanyCd);
