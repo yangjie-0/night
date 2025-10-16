@@ -305,9 +305,9 @@ namespace ProductDataIngestion.Services
                     var sourceRawDict = new Dictionary<string, string>();
 
                     // 第三步：挨列处理 m_data_import_d（根据target_column/attr_cd决定逻辑）
-                    foreach (var detail in importDetails.OrderBy(d => d.ColumnSeq)) // 按列序号排序处理
+                    foreach (var detail in importDetails.OrderBy(d => d.ColumnSeq))
                     {
-                        int colIndex = detail.ColumnSeq; // column_seq 从0开始，CSV Record 从0开始
+                        int colIndex = detail.ColumnSeq;
 
                         if (colIndex < 0 || colIndex >= (csv.Parser.Record?.Length ?? 0))
                         {
@@ -315,9 +315,7 @@ namespace ProductDataIngestion.Services
                             continue;
                         }
 
-                        string? rawValue = csv.Parser.Record[colIndex]; // 直接从Record获取raw值
-                        
-                        // ステップ4: 変換適用（trim等）
+                        string? rawValue = csv.Parser.Record[colIndex];
                         string? transformedValue = ApplyTransformations(rawValue, detail.TransformExpr);
 
                         Console.WriteLine($"  列{detail.ColumnSeq} ({headers?[colIndex] ?? "N/A"}): \"{transformedValue}\"");
@@ -325,40 +323,38 @@ namespace ProductDataIngestion.Services
                         // 元値を保持
                         sourceRawDict[$"col_{detail.ColumnSeq}"] = rawValue ?? "";
 
-                        // ステップ5: 必須チェック
-                        if (detail.IsRequired && string.IsNullOrWhiteSpace(transformedValue))
-                        {
-                            throw new Exception($"必須項目が空です: 列{detail.ColumnSeq} ({detail.AttrCd})");
-                        }
-
-                        // if: target_column有内容 → 登录到temp_product_parsed固定字段（添加source_前缀）
+                        // ⭐ if: target_column有内容 → 登录到temp_product_parsed固定字段
                         if (!string.IsNullOrEmpty(detail.TargetColumn) && detail.TargetEntity == "PRODUCT_MST")
                         {
-                            string targetFieldName = "source_" + detail.TargetColumn; // e.g., source_product_cd
+                            string targetFieldName = "source_" + detail.TargetColumn;
                             if (SetPropertyValue(tempProduct, targetFieldName, transformedValue))
                             {
-                                Console.WriteLine($"    → 固定フィールド: {targetFieldName} = {transformedValue}");
+                                Console.WriteLine($"    → 固定フィールド: {targetFieldName} = {transformedValue ?? "(空)"}");
                             }
                         }
-
-                        // else if: attr_cd有内容 → EAV可展开项目，使用 m_fixed_to_attr_map 映射，直接存入 cl_product_attr，同时备份extras
-                        else if (!string.IsNullOrEmpty(detail.AttrCd) && detail.TargetEntity == "EAV" && !string.IsNullOrWhiteSpace(transformedValue))
+                        // ⭐ else if: attr_cd有内容 → EAV可展开项目
+                        else if (!string.IsNullOrEmpty(detail.AttrCd) && detail.TargetEntity == "EAV")
                         {
                             var attrMaps = await _dataService.GetFixedToAttrMapsAsync(groupCompanyCd, "PRODUCT");
                             var attrMap = attrMaps.FirstOrDefault(m => m.AttrCd == detail.AttrCd);
 
+                            // 即使值为空也创建EAV记录，但设置质量标志
                             var productAttr = new ClProductAttr
                             {
                                 BatchId = batchId,
                                 TempRowId = tempProduct.TempRowId,
                                 AttrCd = detail.AttrCd,
-                                AttrSeq = (short)(_productAttrs.Count(p => p.TempRowId == tempProduct.TempRowId) + 1),
+                                AttrSeq = (short)(_productAttrs.Count(p => p.TempRowId == tempProduct.TempRowId && p.AttrCd == detail.AttrCd) + 1),
                                 SourceId = attrMap?.SourceIdColumn ?? "",
                                 SourceLabel = attrMap?.SourceLabelColumn ?? "",
                                 SourceRaw = transformedValue ?? "",
                                 DataType = attrMap?.DataTypeOverride ?? "TEXT",
-                                QualityFlag = "OK",
-                                QualityDetailJson = "{}",
+                                QualityFlag = string.IsNullOrWhiteSpace(transformedValue) ? "REVIEW" : "OK",
+                                QualityDetailJson = JsonSerializer.Serialize(new
+                                {
+                                    empty_value = string.IsNullOrWhiteSpace(transformedValue),
+                                    processing_stage = "INGEST"
+                                }),
                                 ProvenanceJson = JsonSerializer.Serialize(new
                                 {
                                     stage = "INGEST",
@@ -372,10 +368,9 @@ namespace ProductDataIngestion.Services
                             };
 
                             _productAttrs.Add(productAttr);
-                            Console.WriteLine($"    → EAV属性生成 (map): {detail.AttrCd} = {transformedValue} (source_id={attrMap?.SourceIdColumn ?? "N/A"})");
+                            Console.WriteLine($"    → EAV属性生成: {detail.AttrCd} = {transformedValue ?? "(空)"}");
                         }
-
-                        // else: 备份所有内容到extras_json
+                        // ⭐ else: 仅备份到extras_json
                         else
                         {
                             Console.WriteLine($"    → 仅备份: col_{detail.ColumnSeq} to extras_json");
@@ -392,9 +387,11 @@ namespace ProductDataIngestion.Services
                             target_entity = detail.TargetEntity ?? string.Empty,
                             transform_expr = detail.TransformExpr ?? string.Empty,
                             is_required = detail.IsRequired,
-                            processing_stage = "INGEST"
+                            processing_stage = "INGEST",
+                            processing_result = GetProcessingResult(detail, transformedValue)
                         };
                     }
+
 
                     // source_rawをJSONとして保存（全部数据备份）
                     tempProduct.ExtrasJson = JsonSerializer.Serialize(new
@@ -752,6 +749,16 @@ namespace ProductDataIngestion.Services
         {
             Console.WriteLine($"✓ record_error保存: {errors.Count} レコード");
             await Task.CompletedTask;
+        }
+        // 获取处理结果描述
+        private string GetProcessingResult(MDataImportD detail, string? value)
+        {
+            if (!string.IsNullOrEmpty(detail.TargetColumn))
+                return $"FIXED_FIELD:source_{detail.TargetColumn}";
+            else if (!string.IsNullOrEmpty(detail.AttrCd))
+                return $"EAV_ATTR:{detail.AttrCd}";
+            else
+                return "BACKUP_ONLY";
         }
     }
 }
