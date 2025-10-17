@@ -4,8 +4,8 @@ INSERT INTO m_data_import_setting (
     character_cd, delimiter, header_row_index, skip_row_count, is_active,
     cre_at, upd_at
 ) VALUES 
-(1, 'KM-PROCUDT', 'KM', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp),
-(2, 'RKE-PROCUDT', 'RKE', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp);
+(1, 'KM-PRODUCT', 'KM', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp),
+(2, 'RKE-PRODUCT', 'RKE', 'PRODUCT', 'UTF-8', ',', 1, 0, true, current_timestamp, current_timestamp);
 
 -- m_fixed_to_attr_map テーブルへのデータ挿入
 INSERT INTO m_fixed_to_attr_map 
@@ -47,7 +47,7 @@ INSERT INTO m_data_import_d (
 (1, 53, 'PRODUCT_MST', 'CATEGORY_2_NM', 'category_2_nm', 'TEXT', 'trim(@)', 'TRUE', NULL),
 (1, 54, 'PRODUCT_MST', 'CATEGORY_3_ID', 'category_3_id', 'TEXT', 'trim(@)', 'TRUE', NULL),
 (1, 55, 'PRODUCT_MST', 'CATEGORY_3_NM', 'category_3_nm', 'TEXT', 'trim(@)', 'TRUE', NULL),
-(1, 11, 'PRODUCT_MST', 'PRODUCT_STATUS_CODE', 'product_status_code', 'TEXT', 'trim(@)', 'FALSE', '商品状態必須'),
+(1, 11, 'PRODUCT_MST', 'PRODUCT_STATUS_CODE', 'product_status_cd', 'TEXT', 'trim(@)', 'FALSE', '商品状態必須'),
 (1, 12, 'PRODUCT_MST', 'PRODUCT_STATUS_NM', 'product_status_nm', 'TEXT', 'trim(@)', 'FALSE', '商品状態必須'),
 (1, 13, 'PRODUCT_MST', 'NEW_USED_KBN', 'new_used_kbn', 'TEXT', 'trim(@)', 'FALSE', '新品区分必須'),
 (1, 14, 'PRODUCT_MST', 'QUANTITY', 'quantity', 'TEXT', 'trim(@)', 'FALSE', NULL),
