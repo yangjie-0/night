@@ -101,7 +101,7 @@ CREATE TABLE m_data_import_d (
     import_remarks TEXT,
     cre_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     upd_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (profile_id, target_entity, attr_cd)
+    PRIMARY KEY (profile_id, column_seq, attr_cd)
 );
 
 COMMENT ON TABLE m_data_import_d IS 'ファイル取込ルール詳細マスタ: ファイル取込ルール詳細';
