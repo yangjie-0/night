@@ -294,4 +294,24 @@ INSERT INTO brand_source_map (
     map_id, group_company_cd, source_brand_id, source_brand_nm, 
     source_brand_nm_n, g_brand_id, is_active, source_map_remarks
 ) VALUES 
-(1, 'KM', 4952, 'ROLEX', 'ROLEX', 1, TRUE, NULL);
+(1, 'KM', 4952, 'ROLEX', 'ROLEX', 1, 'TRUE', NULL);
+
+-- m_company テーブルへのデータ挿入
+INSERT INTO m_company (
+    group_company_id, 
+    group_company_cd, 
+    group_company_nm, 
+    default_currency_cd, 
+    is_active,
+    cre_at,
+    upd_at
+) VALUES 
+(1, 'KM', 'KOMEHYO', 'JPY', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(2, 'RKE', 'ロデオドライブ', 'JPY', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(3, 'KBO', 'ブランドオフ', 'JPY', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT (group_company_id) DO UPDATE SET
+    group_company_cd = EXCLUDED.group_company_cd,
+    group_company_nm = EXCLUDED.group_company_nm,
+    default_currency_cd = EXCLUDED.default_currency_cd,
+    is_active = EXCLUDED.is_active,
+    upd_at = CURRENT_TIMESTAMP;
