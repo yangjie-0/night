@@ -57,24 +57,23 @@ namespace ProductDataIngestion.Services
             _logger = logger;
         }
 
-        // 以下为原有同步方法，保留接口名，添加ConfigureAwait(false)以优化异步上下文
-        // 同步获取导入设置（内部调用异步方法）。
+        // 同期メソッド（未使用のためコメントアウト）
+        /*
         public MDataImportSetting GetImportSetting(string groupCompanyCd, string usageNm)
         {
             return GetImportSettingAsync(groupCompanyCd, usageNm).ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
-        // 同步获取导入明细（内部调用异步方法）。
         public List<MDataImportD> GetImportDetails(long profileId)
         {
             return GetImportDetailsAsync(profileId).ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
-        // 同步获取固定属性映射（内部调用异步方法）。
         public List<MFixedToAttrMap> GetFixedToAttrMaps(string groupCompanyCd, string dataKind)
         {
             return GetFixedToAttrMapsAsync(groupCompanyCd, dataKind).ConfigureAwait(false).GetAwaiter().GetResult();
         }
+        */
 
         // SQL常量类，提取查询语句以提高可维护性
         private static class SqlQueries

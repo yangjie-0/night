@@ -94,7 +94,7 @@ INSERT INTO m_data_import_d (
 (1, 35, 'PRODUCT', 'SALES_PRICE_INCL_TAX', 'sales_price_incl_tax', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 36, 'PRODUCT', 'SALES_TAX_RATE', 'sales_tax_rate', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 35, 'PRODUCT', 'PURCHASE_RANK', 'purchase_rank', 'TEXT', 'trim(@)', TRUE, NULL),
-(1, 36, 'PRODUCT', 'PURCHASE_RANK_NAME', 'purchase_rank_nm', 'TEXT', 'trim(@)', TRUE, NULL),
+(1, 36, 'PRODUCT', 'PURCHASE_RANK', 'purchase_rank_nm', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 37, 'PRODUCT', 'SALES_RANK', 'sales_rank', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 38, 'PRODUCT', 'SALES_RANK', 'sales_rank_nm', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 41, 'PRODUCT', 'SALES_CHANNEL_NM', 'sales_channel_nm', 'TEXT', 'trim(@)', FALSE, NULL),
@@ -123,8 +123,8 @@ INSERT INTO m_data_import_d (
 (1, 63, 'PRODUCT_EAV', 'PROCESSING_FEE', 'NULL', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 39, 'PRODUCT_EAV', 'REFERENCE_PRICE', 'NULL', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 40, 'PRODUCT_EAV', 'REFERENCE_PRICE_UPDATED_AT', 'NULL', 'TEXT', 'trim(@)', TRUE, NULL),
-(1, 15, 'PRODUCT_EAV', 'SALES_START_DATE', 'NULL', 'TEXT', 'trim(@)', TRUE, NULL),
-(1, 16, 'PRODUCT_EAV', 'SALES_END_DATE', 'NULL', 'TEXT', 'trim(@)', TRUE, NULL),
+(1, 15, 'PRODUCT_EAV', 'SALES_START_DATE', 'NULL', 'TEXT', 'trim(@)', FALSE, NULL),
+(1, 16, 'PRODUCT_EAV', 'SALES_END_DATE', 'NULL', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 28, 'PRODUCT_EAV', 'GENDER', 'NULL', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 69, 'PRODUCT_EAV', 'PRODUCT_ALIAS', 'NULL', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 12, 'PRODUCT_EAV', 'PRODUCT_LINE', 'NULL', 'TEXT', 'trim(@)', TRUE, NULL),
@@ -246,11 +246,11 @@ INSERT INTO m_attr_cleanse_policy (
 (41, 1, 'SALES_RANK', 'LIST', 18, 'SALES_RANK', 'KM', NULL, 1, 'ID_EXACT', '{}', NULL, TRUE, 0, NULL, TRUE);
 
 INSERT INTO m_attr_definition (
-    attr_id, attr_cd, attr_nm, attr_sort_no, g_category_cd, data_type, 
-    g_list_group_cd, select_type, is_golden_attr, cleanse_phase, 
-    required_context_keys, target_table, target_column, product_unit_cd, 
-    credit_active_flag, usage, table_type_cd, attr_remarks, 
-    is_golden_product, is_golden_attr_PRODUCT_EAV, is_active
+    attr_id, attr_cd, attr_nm, attr_sort_no, g_category_cd, data_type,
+    g_list_group_cd, select_type, is_golden_attr, cleanse_phase,
+    required_context_keys, target_table, target_column, product_unit_cd,
+    credit_active_flag, usage, table_type_cd, attr_remarks,
+    is_golden_product, is_golden_attr_eav, is_active
 ) VALUES 
 (1, 'GP_CD', 'GP会社コード', 1, NULL, 'REF', NULL, 'SINGLE', TRUE, 10, '{}', 'm_product', 'group_company_id', NULL, FALSE, NULL, 'MST', '最終はm_product.group_company_idへ昇格（CLではPRODUCT_EAV1行作成）', TRUE, TRUE, TRUE),
 (2, 'PRODUCT_CD', '商品コード', 2, NULL, 'TEXT', NULL, 'SINGLE', TRUE, 20, '{}', 'm_product', 'product_cd', NULL, FALSE, NULL, 'MST', '先頭ゼロ保持・大文字化・空白除去等の正規化を行いMSTへ昇格', TRUE, TRUE, TRUE),
