@@ -4,169 +4,98 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using ProductDataIngestion.Models;
+using ProductDataIngestion.Repositories;
 using Npgsql;
 using Dapper;
 using System.Reflection;
-using System.IO;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace ProductDataIngestion.Services
 {
-    // CSV文件导入处理服务。
+    /// <summary>
+    /// CSVファイル取込サービス
+    /// ビジネスフロー: CSV受領 → ルール取得 → 読込・変換 → temp保存 → EAV生成
+    /// </summary>
     public class IngestService
     {
-        // 数据导入服务实例。
         private readonly DataImportService _dataService;
-        // 数据库连接字符串。
+        private readonly IBatchRepository _batchRepository;
+        private readonly IProductRepository _productRepository;
         private readonly string _connectionString;
-        // 批处理运行记录列表。
+
+        // 処理中データ保持
         private readonly List<BatchRun> _batchRuns = new();
-        // 临时产品解析记录列表。
         private readonly List<TempProductParsed> _tempProducts = new();
-        // 产品属性记录列表。
         private readonly List<ClProductAttr> _productAttrs = new();
-        // 记录错误列表。
         private readonly List<RecordError> _recordErrors = new();
 
-        // 构造函数：初始化服务。
-        public IngestService(string connectionString)
+        public IngestService(
+            string connectionString,
+            IBatchRepository batchRepository,
+            IProductRepository productRepository)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            _batchRepository = batchRepository ?? throw new ArgumentNullException(nameof(batchRepository));
+            _productRepository = productRepository ?? throw new ArgumentNullException(nameof(productRepository));
             _dataService = new DataImportService(connectionString);
         }
 
-        // GP会社コードの簡易検証（存在チェック、将来はDB照会に置換可能）
-        private async Task ValidateCompanyAsync(string groupCompanyCd)
+        /// <summary>
+        /// CSVファイル取込メイン処理
+        /// フロー全体: 1.バッチ起票 → 2.ルール取得 → 3-6.CSV処理 → 7-9.EAV生成 → 10.統計更新
+        /// </summary>
+        public async Task<string> ProcessCsvFileAsync(string filePath, string groupCompanyCd, string targetEntity)
         {
-            if (string.IsNullOrWhiteSpace(groupCompanyCd))
-            {
-                throw new ArgumentException("GP会社コードが指定されていません。", nameof(groupCompanyCd));
-            }
+            Console.WriteLine($"=== CSV取込開始 ===\nファイル: {filePath}\nGP会社: {groupCompanyCd}\n処理モード: {targetEntity}");
 
-            // 現在は簡易検証のみ実施。将来的に _dataService を使った詳細チェックに差し替える。
-            Console.WriteLine($"✓ GP会社コード検証: {groupCompanyCd}");
+            // 会社コード検証
+            await ValidateCompanyCodeAsync(groupCompanyCd);
 
-            await Task.CompletedTask;
-        }
-
-        // 异步处理CSV文件导入。
-        public async Task<string> ProcessCsvFileAsync(string filePath, string groupCompanyCd, string targetEntity = "PRODUCT")
-        {
-            Console.WriteLine("=== 取込処理開始 ===");
-            Console.WriteLine($"ファイルパス: {filePath}");
-            Console.WriteLine($"GP会社コード: {groupCompanyCd}");
-            Console.WriteLine($"ターゲットエンティティ: {targetEntity}");
-
-            // 0. GP会社コード検証
-            await ValidateCompanyAsync(groupCompanyCd);
-
-            // 1. バッチ起票
-            var batchId = await Step1_CreateBatchRun(filePath, groupCompanyCd, targetEntity);
+            // フロー1: バッチ起票
+            var batchId = await CreateBatchRunAsync(filePath, groupCompanyCd, targetEntity);
 
             try
             {
-                // 2. ファイル取込ルールの取得
-                var (importSetting, importDetails) = await Step2_GetImportRules(groupCompanyCd, targetEntity);
+                // フロー2: ファイル取込ルール取得
+                var (importSetting, importDetails) = await FetchImportRulesAsync(groupCompanyCd, targetEntity);
 
-                // 🔍 添加调试信息：显示TempProductParsed的属性结构
-                Console.WriteLine($"\n🔍 调试信息:");
-                Console.WriteLine($"TempProductParsed属性列表:");
-                var allSourceProperties = typeof(TempProductParsed).GetProperties()
-                    .Where(p => p.Name.StartsWith("Source") && p.CanWrite)
-                    .OrderBy(p => p.Name)
-                    .Select(p => p.Name)
-                    .ToList();
-                
-                int count = 0;
-                foreach (var prop in allSourceProperties)
-                {
-                    Console.WriteLine($"  - {prop}");
-                    count++;
-                    if (count >= 15) // 只显示前15个属性
-                    {
-                        Console.WriteLine($"  ... 还有 {allSourceProperties.Count - 15} 个属性");
-                        break;
-                    }
-                }
+                // フロー3: CSV読み込み前のI/O設定
+                var (config, headerRowIndex) = ConfigureCsvReaderSettings(importSetting);
 
-                // 🔍 添加调试信息：显示映射配置
-                Console.WriteLine($"\n📋 映射配置详情:");
-                Console.WriteLine($"importDetails 数量: {importDetails.Count}");
-                var productMstMappings = importDetails.Where(d => d.TargetEntity == "PRODUCT_MST").ToList();
-                Console.WriteLine($"PRODUCT_MST 映射数量: {productMstMappings.Count}");
-                
-                foreach (var mapping in productMstMappings.Take(10)) // 只显示前10个
-                {
-                    string expectedFieldName = "Source" + ToPascalCase(mapping.TargetColumn ?? "");
-                    Console.WriteLine($"  列{mapping.ColumnSeq} -> TargetColumn='{mapping.TargetColumn}' -> {expectedFieldName} (Attr: {mapping.AttrCd})");
-                }
-                if (productMstMappings.Count > 10)
-                {
-                    Console.WriteLine($"  ... 还有 {productMstMappings.Count - 10} 个映射");
-                }
+                // フロー4-6: CSV 1行ずつ読込 → 必須チェック → temp保存
+                var result = await ReadCsvAndSaveToTempAsync(filePath, batchId, groupCompanyCd,
+                                                             headerRowIndex, importDetails, config);
 
-                // 3. CSV読み込み前のI/O設定
-                var config = Step3_ConfigureCsvReader(importSetting);
+                // フロー7-9: 固定→EAV投影、EAV生成、メタ付与
+                await GenerateProductAttributesAsync(batchId, groupCompanyCd, importDetails,targetEntity);
 
-                // 4-6. CSV処理とtemp保存（第三步：m_data_import_d列处理逻辑）
-                var result = await Step4To6_ProcessCsvAndSaveToTemp(filePath, batchId, groupCompanyCd, importSetting, importDetails, config);
+                // フロー10: バッチ統計更新
+                await UpdateBatchStatisticsAsync(batchId, result);
 
-                // 7-9. 属性マッピングとcl_product_attr作成（第三步后续：EAV生成及固定字段转换）
-                await Step7To9_CreateProductAttributes(batchId, groupCompanyCd, importDetails);
-
-                // 10. バッチ統計更新
-                await Step10_UpdateBatchStatistics(batchId, result);
-
-                Console.WriteLine("\n=== 取込処理完了 ===");
+                Console.WriteLine($"=== 取込完了 ===\n読込: {result.readCount}\n成功: {result.okCount}\n失敗: {result.ngCount}");
                 return batchId;
             }
             catch (Exception ex)
             {
-                await MarkBatchAsFailed(batchId, ex.Message);
+                await MarkBatchAsFailedAsync(batchId, ex.Message);
                 throw;
             }
         }
 
-        // 添加辅助方法：snake_case转PascalCase
-        private string ToPascalCase(string input)
+        #region フロー1: バッチ起票
+
+        /// <summary>
+        /// フロー1: バッチ起票
+        /// - batch_id 採番
+        /// - batch_run に idem_key で冪等化レコード作成 (RUNNING)
+        /// - started_at = now()
+        /// </summary>
+        private async Task<string> CreateBatchRunAsync(string filePath, string groupCompanyCd, string targetEntity)
         {
-            if (string.IsNullOrEmpty(input))
-                return input;
-
-            var parts = input.Split(new char[] { '_', '-' }, StringSplitOptions.RemoveEmptyEntries);
-            return string.Concat(parts.Select(part => char.ToUpperInvariant(part[0]) + part.Substring(1).ToLowerInvariant()));
-        }
-
-        // 打印导入结果摘要。
-        public void PrintResults()
-        {
-            Console.WriteLine("\n=== 取込結果サマリー ===");
-            Console.WriteLine($"TempProductParsed: {_tempProducts.Count}");
-            Console.WriteLine($"ClProductAttr: {_productAttrs.Count}");
-            Console.WriteLine($"RecordError: {_recordErrors.Count}");
-
-            var stats = _batchRuns.LastOrDefault();
-            if (stats != null)
-            {
-                Console.WriteLine($"最終バッチ状態: {stats.BatchStatus}");
-            }
-        }
-
-        // ステップ1: バッチ起票。
-        private async Task<string> Step1_CreateBatchRun(string filePath, string groupCompanyCd, string targetEntity)
-        {
-            Console.WriteLine("\n--- ステップ1: バッチ起票 ---");
-
-            // バッチID生成
+            // batch_id 採番
             string batchId = $"BATCH_{DateTime.Now:yyyyMMddHHmmss}_{Guid.NewGuid():N}";
-            Console.WriteLine($"生成 BatchId: {batchId}");
-
-            // IdemKey生成 (S3 key + ETagの代わりにファイルパス+最終更新日時)
             var fileInfo = new FileInfo(filePath);
             string idemKey = $"{filePath}_{fileInfo.LastWriteTime.Ticks}";
 
-            // batch_run 作成
             var batchRun = new BatchRun
             {
                 BatchId = batchId,
@@ -179,487 +108,695 @@ namespace ProductDataIngestion.Services
                 CountsJson = "{\"INGEST\":{\"read\":0,\"ok\":0,\"ng\":0}}"
             };
 
-            // データベースに保存
-            await SaveBatchRunToDatabase(batchRun);
-
+            await _batchRepository.CreateBatchRunAsync(batchRun);
             _batchRuns.Add(batchRun);
-            Console.WriteLine($"✓ バッチ起票完了: {batchId}");
 
+            Console.WriteLine($"バッチ起票完了: {batchId}");
             return batchId;
         }
 
-        // ステップ2: ファイル取込ルールの取得（通过GP会社コード + 用途名=GP-PRODUCT确定profile_id）。
-        private async Task<(MDataImportSetting, List<MDataImportD>)> Step2_GetImportRules(string groupCompanyCd, string targetEntity)
+        #endregion
+
+        #region フロー2: ファイル取込ルールの取得
+
+        /// <summary>
+        /// フロー2: ファイル取込ルールの取得
+        /// - 入力: group_company_cd と target_entity
+        /// - m_data_import_setting を探索して有効な profile_id を決定
+        /// - 同 profile_id で m_data_import_d を全件取得
+        /// - ルール不在/重複は致命的エラー → FAILED
+        /// </summary>
+        private async Task<(MDataImportSetting, List<MDataImportD>)> FetchImportRulesAsync(
+            string groupCompanyCd, string targetEntity)
         {
-            Console.WriteLine("\n--- ステップ2: ファイル取込ルールの取得 ---");
-
-            string usageNm = $"{groupCompanyCd}-{targetEntity}"; // 用途名：GP会社コード + PRODUCT
-            Console.WriteLine($"探索用途名: {usageNm}");
-
-            // データベースから設定を取得（异步版本）
+            string usageNm = $"{groupCompanyCd}-{targetEntity}";
             var importSetting = await _dataService.GetImportSettingAsync(groupCompanyCd, usageNm);
-            
-            if (importSetting == null)
-            {
-                throw new Exception($"ファイル取込設定が見つかりません: GP会社コード={groupCompanyCd}, 用途名={usageNm}");
-            }
 
-            // 設定の検証
-            if (!importSetting.IsActive)
-            {
-                throw new Exception($"ファイル取込設定が無効です: ProfileId={importSetting.ProfileId}");
-            }
+            // is_active チェック
+            if (importSetting == null || !importSetting.IsActive)
+                throw new Exception($"有効なファイル取込設定が見つかりません: {usageNm}");
 
-            Console.WriteLine($"✅ プロファイルID: {importSetting.ProfileId}");
-            Console.WriteLine($"✅ 用途名: {importSetting.UsageNm}");
-            Console.WriteLine($"✅ ターゲット: {importSetting.TargetEntity}");
-            Console.WriteLine($"✅ 文字コード: {importSetting.CharacterCd}");
-            Console.WriteLine($"✅ 区切り文字: '{importSetting.Delimiter}'");
-            Console.WriteLine($"✅ ヘッダー行番号: {importSetting.HeaderRowIndex}");
-            Console.WriteLine($"✅ スキップ行数: {importSetting.SkipRowCount}");
-            Console.WriteLine($"✅ 有効フラグ: {importSetting.IsActive}");
-            
-            if (!string.IsNullOrEmpty(importSetting.ImportSettingRemarks))
-            {
-                Console.WriteLine($"✅ 備考: {importSetting.ImportSettingRemarks}");
-            }
-
-            // 列マッピングの取得
+            // 列マッピング取得
             var importDetails = await _dataService.GetImportDetailsAsync(importSetting.ProfileId);
-            Console.WriteLine($"✅ 列マッピング数: {importDetails.Count}");
-
-            // 简单输出读取的设定表内容
-            Console.WriteLine("\n📋 读取的设定表内容:");
-            Console.WriteLine($"  profile_id: {importSetting.ProfileId}");
-            Console.WriteLine($"  usage_nm: {importSetting.UsageNm}");
-            Console.WriteLine($"  group_company_cd: {importSetting.GroupCompanyCd}");
-            Console.WriteLine($"  target_entity: {importSetting.TargetEntity}");
-            Console.WriteLine($"  character_cd: {importSetting.CharacterCd}");
-            Console.WriteLine($"  delimiter: '{importSetting.Delimiter}'");
-            Console.WriteLine($"  header_row_index: {importSetting.HeaderRowIndex}");
-            Console.WriteLine($"  skip_row_count: {importSetting.SkipRowCount}");
-            Console.WriteLine($"  is_active: {importSetting.IsActive}");
-            
-            if (!string.IsNullOrEmpty(importSetting.ImportSettingRemarks))
-            {
-                Console.WriteLine($"  import_setting_remarks: {importSetting.ImportSettingRemarks}");
-            }
+            Console.WriteLine($"取込ルール取得完了: ProfileId={importSetting.ProfileId}, 列数={importDetails.Count}");
 
             return (importSetting, importDetails);
         }
 
-        // ステップ3: CSV読み込み前のI/O設定。
-        private CsvConfiguration Step3_ConfigureCsvReader(MDataImportSetting importSetting)
-        {
-            Console.WriteLine("\n--- ステップ3: CSV読み込み設定 ---");
+        #endregion
 
+        #region フロー3: CSV読み込み前のI/O設定
+
+        /// <summary>
+        /// フロー3: CSV読み込み前のI/O設定
+        /// - 文字コード、区切り、ヘッダ行スキップを設定
+        /// - header_row_index で指定された行をヘッダーとして読み込み、その後のデータ行のみ処理
+        /// </summary>
+        private (CsvConfiguration, int) ConfigureCsvReaderSettings(MDataImportSetting importSetting)
+        {
             var config = new CsvConfiguration(CultureInfo.InvariantCulture)
             {
-                HasHeaderRecord = false, // 手動でヘッダー処理
-                Delimiter = importSetting.Delimiter ?? ",",
-                BadDataFound = context => 
-                {
-                    Console.WriteLine($"不良データ検出: {context.RawRecord}");
-                },
+                HasHeaderRecord = true, // ヘッダー行を自動的に読み込む
+                Delimiter = importSetting.Delimiter ?? ",",// デフォルトはカンマ区切り
+                BadDataFound = context => { },
                 MissingFieldFound = null,
-                Encoding = GetEncoding(importSetting.CharacterCd ?? "UTF-8")
+                Encoding = GetEncodingFromCharacterCode(importSetting.CharacterCd ?? "UTF-8")// デフォルトは UTF-8
             };
 
-            Console.WriteLine($"✓ CSV設定完了: 区切り文字='{importSetting.Delimiter}', 文字コード={importSetting.CharacterCd}");
-
-            return config;
+            // header_row_index を返して、後で使用する
+            return (config, importSetting.HeaderRowIndex);
         }
 
-        private async Task<(int readCount, int okCount, int ngCount)> Step4To6_ProcessCsvAndSaveToTemp(
+        #endregion
+
+        #region フロー4-6: CSV読込 → 必須チェック → temp保存
+
+        /// <summary>
+        /// フロー4-6: CSV読込 → 必須チェック → temp保存
+        /// - header_row_index で指定された行までスキップし、その行をヘッダーとして読み込む
+        /// - その後のデータ行を処理 (変換はConfigで既に設定済み)
+        /// - column_seq = 0: 公司コード注入
+        /// - column_seq > 0: CSV列番号 (そのままCSV配列インデックスとして使用)
+        /// </summary>
+        private async Task<(int readCount, int okCount, int ngCount)> ReadCsvAndSaveToTempAsync(
             string filePath, string batchId, string groupCompanyCd,
-            MDataImportSetting importSetting, List<MDataImportD> importDetails, CsvConfiguration config)
+            int headerRowIndex, List<MDataImportD> importDetails, CsvConfiguration config)
         {
-            Console.WriteLine("\n--- ステップ4-6: CSV読込・変換・必須チェック・temp保存 ---");
-
             int readCount = 0, okCount = 0, ngCount = 0;
-
             using var reader = new StreamReader(filePath, config.Encoding ?? Encoding.UTF8);
             using var csv = new CsvReader(reader, config);
 
-            // ヘッダー処理
-            string[]? headers = null;
-            long currentLine = 0;
-
-            // ヘッダー行まで読み進める
-            while (currentLine < importSetting.HeaderRowIndex)
+            // フロー4: ヘッダー行までスキップ
+            for (int i = 0; i < headerRowIndex - 1; i++)
             {
-                if (await csv.ReadAsync())
-                {
-                    currentLine++;
-                    if (currentLine == importSetting.HeaderRowIndex)
-                    {
-                        headers = csv.Parser.Record;
-                        Console.WriteLine($"✓ ヘッダー行読み込み (行 {currentLine}): {headers?.Length} 列");
-                        
-                        // 调试：显示列映射
-                        Console.WriteLine($"\n📋 列映射配置:");
-                        foreach (var detail in importDetails.OrderBy(d => d.ColumnSeq))
-                        {
-                            string headerName = (headers != null && detail.ColumnSeq < headers.Length) 
-                                ? headers[detail.ColumnSeq] ?? "N/A" 
-                                : "N/A";
-                            Console.WriteLine($"  列{detail.ColumnSeq}: '{headerName}' -> {detail.TargetEntity}.{detail.TargetColumn} (Attr: {detail.AttrCd})");
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"⏩ 行 {currentLine} をスキップ (ヘッダー前)");
-                    }
-                }
-                else
-                {
-                    break;
-                }
+                if (!await csv.ReadAsync())
+                    throw new Exception($"ヘッダー行 {headerRowIndex} まで到達できません");
             }
 
-            // スキップ行の処理
-            var skipRows = ParseSkipRows(importSetting.SkipRows);
-            Console.WriteLine($"スキップ対象行: {(skipRows.Any() ? string.Join(", ", skipRows) : "なし")}");
+            // ヘッダー行を読み込む
+            if (!await csv.ReadAsync())
+                throw new Exception("ヘッダー行が読み込めません");
 
-            Console.WriteLine($"\n--- データ行処理開始 ---");
+            csv.ReadHeader();
+            var headers = csv.HeaderRecord;
+            if (headers == null || headers.Length == 0)
+                throw new Exception("ヘッダー行が空です");
 
-            // データ行処理
+            Console.WriteLine($"ヘッダー取得完了: {headers.Length} 列");
+
+            // 列マッピング検証
+            ValidateColumnMappings(importDetails, headers);
+
+            // データ行処理開始
             long dataRowNumber = 0;
+            int currentPhysicalLine = headerRowIndex;
 
             while (await csv.ReadAsync())
             {
-                currentLine++;
+                currentPhysicalLine++;
                 dataRowNumber++;
+                readCount++;
 
-                // 跳过指定行
-                if (skipRows.Contains(dataRowNumber))
+                var record = csv.Parser.Record;
+                if (record == null || record.Length == 0)
                 {
-                    Console.WriteLine($"⏩ データ行 {dataRowNumber} をスキップ (設定によるスキップ)");
+                    RecordError(batchId, dataRowNumber, currentPhysicalLine, "空のレコード", record);
+                    ngCount++;
                     continue;
                 }
 
-                readCount++;
-
                 try
                 {
-                    long displayLineNo = dataRowNumber;
-
-                    var tempProduct = new TempProductParsed
-                    {
-                        TempRowId = Guid.NewGuid(),
-                        BatchId = batchId,
-                        LineNo = displayLineNo,
-                        SourceGroupCompanyCd = groupCompanyCd,
-                        StepStatus = "READY",
-                        ExtrasJson = "{}"
-                    };
-
-                    Console.WriteLine($"\n📝 データ行番号 {displayLineNo} (ファイル行 {currentLine}):");
-
-                    var extrasDict = new Dictionary<string, object>();
-                    var sourceRawDict = new Dictionary<string, string>();
-                    var requiredFields = new Dictionary<string, string>();
-
-                    // 按照 m_data_import_d 规则处理每一列
-                    foreach (var detail in importDetails.OrderBy(d => d.ColumnSeq))
-                    {
-                        // ColumnSeq 在数据库中可能是 0-based 或 1-based，不确定时尝试两种索引
-                        int colIndex = detail.ColumnSeq;
-                        string? rawValue = null;
-                        var record = csv.Parser.Record;
-
-                        if (record != null)
-                        {
-                            if (colIndex >= 0 && colIndex < record.Length)
-                            {
-                                rawValue = record[colIndex];
-                            }
-                            else if (colIndex - 1 >= 0 && colIndex - 1 < record.Length)
-                            {
-                                // 支持 ColumnSeq 存 1-based 的情况
-                                rawValue = record[colIndex - 1];
-                                Console.WriteLine($"    注意: ColumnSeq {detail.ColumnSeq} 看起来像 1-based，已使用 index {colIndex - 1}");
-                            }
-                        }
-
-                        if (rawValue == null)
-                        {
-                            Console.WriteLine($"  列{detail.ColumnSeq}: [範囲外または空]");
-                            continue;
-                        }
-
-                        // 步骤4: 应用转换表达式（兼容 null）
-                        string? transformedValue = ApplyTransformations(rawValue, detail.TransformExpr ?? "");
-
-                        Console.WriteLine($"  列{detail.ColumnSeq} ({headers?[colIndex] ?? "N/A"}): \"{rawValue}\" -> \"{transformedValue}\"");
-
-                        // 保存原始值
-                        sourceRawDict[$"col_{detail.ColumnSeq}"] = rawValue ?? "";
-
-                        // 步骤5: 必须字段检查
-                        if (detail.IsRequired && string.IsNullOrWhiteSpace(transformedValue))
-                        {
-                            requiredFields[detail.AttrCd ?? detail.TargetColumn ?? $"col_{detail.ColumnSeq}"] = 
-                                $"必須項目が空です: {detail.AttrCd ?? detail.TargetColumn}";
-                        }
-
-                        bool? mappingSuccess = null;
-
-                        // 步骤6: 根据 target_entity 处理数据 - 修复这里的逻辑
-                        // 兼容多种配置：有的 profile 会使用 "PRODUCT_MST"，有的使用 "PRODUCT"
-                        if (!string.IsNullOrEmpty(detail.TargetColumn) &&
-                            (string.Equals(detail.TargetEntity, "PRODUCT_MST", StringComparison.OrdinalIgnoreCase)
-                             || string.Equals(detail.TargetEntity, "PRODUCT", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            // 统一使用大写S开头，并转换为PascalCase
-                            string targetFieldName = "Source" + ToPascalCase(detail.TargetColumn);
-                            Console.WriteLine($"    尝试映射: TargetColumn='{detail.TargetColumn}' -> {targetFieldName}");
-                            
-                            mappingSuccess = SetPropertyValue(tempProduct, targetFieldName, transformedValue);
-                            
-                            if (mappingSuccess.Value)
-                            {
-                                Console.WriteLine($"    → 固定フィールド映射成功: {targetFieldName} = '{transformedValue ?? "(空)"}'");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"    ❌ 固定フィールド映射失败: {targetFieldName}");
-                                // 调试：显示可用的属性
-                                var properties = typeof(TempProductParsed).GetProperties()
-                                    .Where(p => p.Name.StartsWith("Source"))
-                                    .Select(p => p.Name)
-                                    .ToList();
-                                Console.WriteLine($"      可用字段 (前10): {string.Join(", ", properties.Take(10))}");
-                                if (properties.Count > 10)
-                                    Console.WriteLine($"      ... 总计 {properties.Count} 个字段");
-                            }
-                        }
-                        else if (detail.TargetEntity == "EAV" && !string.IsNullOrEmpty(detail.AttrCd))
-                        {
-                            // EAV字段处理...
-                            var productAttr = new ClProductAttr
-                            {
-                                BatchId = batchId,
-                                TempRowId = tempProduct.TempRowId,
-                                AttrCd = detail.AttrCd,
-                                AttrSeq = (short)(_productAttrs.Count(p => p.TempRowId == tempProduct.TempRowId && p.AttrCd == detail.AttrCd) + 1),
-                                SourceId = $"col_{detail.ColumnSeq}",
-                                SourceLabel = headers?[colIndex] ?? $"Column_{detail.ColumnSeq}",
-                                SourceRaw = transformedValue ?? "",
-                                ValueText = transformedValue ?? "", // 修复：设置ValueText
-                                DataType = "TEXT",
-                                QualityFlag = string.IsNullOrWhiteSpace(transformedValue) ? "REVIEW" : "OK",
-                                QualityDetailJson = JsonSerializer.Serialize(new
-                                {
-                                    empty_value = string.IsNullOrWhiteSpace(transformedValue),
-                                    processing_stage = "INGEST",
-                                    is_required = detail.IsRequired
-                                }),
-                                ProvenanceJson = JsonSerializer.Serialize(new
-                                {
-                                    stage = "INGEST",
-                                    from = "EAV",
-                                    via = "direct_map",
-                                    profile_id = detail.ProfileId,
-                                    column_seq = detail.ColumnSeq,
-                                    transform_expr = detail.TransformExpr
-                                }),
-                                RuleVersion = "1.0"
-                            };
-
-                            _productAttrs.Add(productAttr);
-                            Console.WriteLine($"    → EAV属性生成: {detail.AttrCd} = '{transformedValue ?? "(空)"}'");
-                        }
-
-                        // 所有处理信息保存到 extras_json
-                        extrasDict[$"col_{detail.ColumnSeq}"] = new
-                        {
-                            header = headers?[colIndex] ?? "N/A",
-                            raw_value = rawValue ?? "",
-                            transformed_value = transformedValue ?? "",
-                            attr_cd = detail.AttrCd ?? string.Empty,
-                            target_column = detail.TargetColumn ?? string.Empty,
-                            target_entity = detail.TargetEntity ?? string.Empty,
-                            transform_expr = detail.TransformExpr ?? string.Empty,
-                            is_required = detail.IsRequired,
-                            processing_stage = "INGEST",
-                            processing_result = GetProcessingResult(detail, transformedValue),
-                            mapping_success = mappingSuccess
-                        };
-                    }
-
-                    // 步骤5: 必须字段检查失败处理
-                    if (requiredFields.Any())
-                    {
-                        throw new Exception($"必須項目エラー: {string.Join("; ", requiredFields.Values)}");
-                    }
-
-                    // 调试：显示tempProduct的实际数据 (更多属性)
-                    Console.WriteLine($"  🔍 TempProduct数据验证 (部分属性):");
-                    var sampleProps = new[] { "SourceProductCd", "SourceBrandNm", "SourceCategory1Nm", "SourceQuantity", "SourcePurchasePriceExclTax" };
-                    foreach (var propName in sampleProps)
-                    {
-                        var prop = typeof(TempProductParsed).GetProperty(propName);
-                        var value = prop?.GetValue(tempProduct) as string ?? "null";
-                        Console.WriteLine($"    - {propName}: '{value}'");
-                    }
-
-                    // 保存原始数据到 extras_json
-                    tempProduct.ExtrasJson = JsonSerializer.Serialize(new
-                    {
-                        source_raw = sourceRawDict,
-                        processed_columns = extrasDict,
-                        headers = headers,
-                        processing_timestamp = DateTime.UtcNow,
-                        required_fields_check = requiredFields
-                    }, new JsonSerializerOptions { WriteIndented = false });
-
-                    // 步骤6: 保存到临时表
-                    _tempProducts.Add(tempProduct);
+                    // CSV行をtempProductにマッピング
+                    MapCsvRowToTempProduct(batchId, groupCompanyCd, dataRowNumber, currentPhysicalLine,
+                                           record, headers, importDetails);
                     okCount++;
-                    Console.WriteLine($"  ✅ 取込成功 (TempRowId: {tempProduct.TempRowId})");
-
                 }
                 catch (Exception ex)
                 {
+                    RecordError(batchId, dataRowNumber, currentPhysicalLine, ex.Message, record);
                     ngCount++;
-                    var rawFragment = string.Empty;
-                    try { rawFragment = csv.Context?.Parser?.RawRecord ?? string.Empty; } catch { rawFragment = string.Empty; }
-                    var error = new RecordError
-                    {
-                        BatchId = batchId,
-                        Step = "INGEST",
-                        RecordRef = $"line:{dataRowNumber}",
-                        ErrorCd = ex.Message.Contains("必須項目") ? "MISSING_REQUIRED_FIELD" : "PARSE_FAILED",
-                        ErrorDetail = ex.Message,
-                        RawFragment = rawFragment
-                    };
-                    _recordErrors.Add(error);
-                    Console.WriteLine($"  ❌ エラー: {ex.Message}");
                 }
             }
 
-            // 保存到数据库
-            await SaveTempProductsToDatabase(_tempProducts);
-            await SaveRecordErrorsToDatabase(_recordErrors);
-
-            Console.WriteLine($"\n✓ データ処理完了: 読込={readCount}, 成功={okCount}, エラー={ngCount}");
+            // データベース保存 (フロー6: temp への保存)
+            await SaveToTempTablesAsync();
 
             return (readCount, okCount, ngCount);
         }
 
-        // 解析跳过行字符串为HashSet（逗号分隔特定行号，只跳过指定行）。
-        private HashSet<long> ParseSkipRows(string skipRows)
+        /// <summary>
+        /// 列マッピング検証
+        /// column_seq = 0: 公司コード注入 (CSV列不要)
+        /// column_seq > 0: CSV列番号 (1始まり、配列インデックスは -1 が必要)
+        /// 重要: is_required=true の必須列のみ検証し、オプション列は CSV に存在しなくても許可
+        /// </summary>
+        private void ValidateColumnMappings(List<MDataImportD> importDetails, string[] headers)
         {
-            var skipSet = new HashSet<long>();
-            if (!string.IsNullOrEmpty(skipRows))
+            var errors = new List<string>();
+            var requiredCount = 0;
+
+            foreach (var detail in importDetails
+                .Where(d => d.IsRequired)
+                .OrderBy(d => d.ColumnSeq))
             {
-                var skipRowStrings = skipRows.Split(',');
-                foreach (var rowStr in skipRowStrings)
+                // column_seq = 0 は公司コード注入なのでスキップ
+                if (detail.ColumnSeq == 0) continue;
+
+                // column_seq > 0 は CSV列番号 (1始まり)、配列インデックスは -1
+                int csvIndex = detail.ColumnSeq - 1;
+
+                // CSV範囲外チェック: 必須列のみエラーとする
+                if (csvIndex < 0 || csvIndex >= headers.Length)
                 {
-                    if (long.TryParse(rowStr.Trim(), out long skipRow))
+                    if (detail.IsRequired)
                     {
-                        skipSet.Add(skipRow);
+                        errors.Add($"必須列{detail.ColumnSeq} ({detail.AttrCd ?? detail.TargetColumn}) がCSV範囲外 (CSV列数: {headers.Length})");
+                        requiredCount++;
                     }
                 }
             }
-            return skipSet;
+
+            Console.WriteLine($"列マッピング検証完了: CSV列数={headers.Length}, 必須列エラー={requiredCount}");
+
+            if (errors.Any())
+                throw new Exception($"列マッピングエラー :\n{string.Join("\n", errors)}");
         }
 
-        // ステップ7-9: 属性マッピングとcl_product_attr作成（第三步后续：EAV生成及固定字段转换）
-        private async Task Step7To9_CreateProductAttributes(string batchId, string groupCompanyCd, List<MDataImportD> importDetails)
+        /// <summary>
+        /// フロー4-5: CSV行をtempProductにマッピング + 必須チェック
+        /// - column_seq = 0: 公司コード注入
+        /// - column_seq > 0: CSV列番号 (1始まり、配列インデックスは -1 が必要)
+        /// - transform_expr 適用 (trim(@))
+        /// - is_required チェック
+        /// - CSV範囲外の列はスキップ (オプション列のみ)
+        /// </summary>
+        private void MapCsvRowToTempProduct(
+            string batchId, string groupCompanyCd, long dataRowNumber, int currentPhysicalLine,
+            string[] record, string[] headers, List<MDataImportD> importDetails)
         {
-            Console.WriteLine("\n--- ステップ7-9: 属性マッピングとcl_product_attr作成 ---");
+            var tempProduct = new TempProductParsed
+            {
+                TempRowId = Guid.NewGuid(),
+                BatchId = batchId,
+                LineNo = dataRowNumber,
+                SourceGroupCompanyCd = groupCompanyCd,
+                StepStatus = "READY",
+                ExtrasJson = "{}"
+            };
 
-            // 由于第三步已处理 EAV，这里只 fallback 固定字段未映射的
-            var attrMaps = await _dataService.GetFixedToAttrMapsAsync(groupCompanyCd, "PRODUCT");
-            Console.WriteLine($"✓ 属性マップ数: {attrMaps.Count}");
+            var extrasDict = new Dictionary<string, object>();
+            var sourceRawDict = new Dictionary<string, string>();
+            var requiredFieldErrors = new List<string>();
+
+            foreach (var detail in importDetails
+                .Where(d => d.IsRequired)
+               .OrderBy(d => d.ColumnSeq))
+            {
+                string? rawValue = null;
+                string? transformedValue = null;
+                string headerName = "N/A";
+                bool isInjectedValue = false;
+
+                // column_seq = 0: 公司コード注入
+                if (detail.ColumnSeq == 0)
+                {
+                    rawValue = transformedValue = groupCompanyCd;
+                    headerName = "[注入:group_company_cd]";
+                    isInjectedValue = true;
+                }
+                // column_seq > 0: CSV列番号 (1始まり)、配列インデックスは -1
+                else if (detail.ColumnSeq > 0)
+                {
+                    int csvIndex = detail.ColumnSeq - 1;  // CSV列番号をインデックスに変換
+
+                    // CSV範囲外チェック: ヘッダー範囲とレコード範囲の両方をチェック
+                    if (csvIndex >= headers.Length || csvIndex >= record.Length)
+                    {
+                        // CSV範囲外の列はスキップ (オプション列として扱う)
+                        // 必須列の場合は後の必須チェックでエラーになる
+                        continue;
+                    }
+
+                    rawValue = record[csvIndex];
+                    headerName = headers[csvIndex];
+                    // transform_expr 適用、スペース除去
+                    transformedValue = ApplyTransformExpression(rawValue, detail.TransformExpr ?? "");
+                }
+                else
+                {
+                    continue;
+                }
+
+                // フロー5: 必須チェック (is_required)
+                // if (detail.IsRequired && string.IsNullOrWhiteSpace(transformedValue))
+                // {
+                //     string fieldName = detail.AttrCd ?? detail.TargetColumn ?? $"列{detail.ColumnSeq}";
+                //     requiredFieldErrors.Add($"{fieldName} (列{detail.ColumnSeq})");
+                // }
+
+                // 元CSV値を source_raw として保持
+                string backupKey = isInjectedValue ? $"_injected_{detail.TargetColumn}" : headerName;
+                sourceRawDict[backupKey] = rawValue ?? "";
+
+                // データ格納 (固定フィールド or EAV準備)
+                bool? mappingSuccess = null;
+
+                // 固定フィールドへマッピング TODO appsettings.json
+                if (!string.IsNullOrEmpty(detail.TargetColumn) &&
+                    (detail.ProjectionKind == "PRODUCT_MST" || detail.ProjectionKind == "PRODUCT"))
+                {
+                    string propertyName = "Source" + ConvertToPascalCase(detail.TargetColumn);
+                    mappingSuccess = SetTempProductProperty(tempProduct, propertyName, transformedValue);
+                }
+
+                // EAV ターゲット生成準備 (Step B-1: CSV 侧指定了 attr_cd 的列)
+                // 注释掉: 现在只处理 PRODUCT_MST,不处理 EAV
+                // if (detail.ProjectionKind == "EAV" && !string.IsNullOrEmpty(detail.AttrCd))
+                // {
+                //     CreateEavAttribute(batchId, tempProduct.TempRowId, detail, detail.ColumnSeq,
+                //                       headerName, transformedValue, isInjectedValue);
+                // }
+
+                // extras_json 用の詳細情報保存
+                extrasDict[$"col_{detail.ColumnSeq}"] = new
+                {
+                    csv_column_index = detail.ColumnSeq,
+                    header = headerName,
+                    raw_value = rawValue ?? "",
+                    transformed_value = transformedValue ?? "",
+                    target_column = detail.TargetColumn ?? "",
+                    projection_kind = detail.ProjectionKind ?? "",
+                    attr_cd = detail.AttrCd ?? "",
+                    transform_expr = detail.TransformExpr ?? "",
+                    is_required = detail.IsRequired,
+                    is_injected = isInjectedValue,
+                    mapping_success = mappingSuccess
+                };
+            }
+
+            // 必須チェック結果
+            if (requiredFieldErrors.Any())
+                throw new Exception($"必須項目エラー: {string.Join(", ", requiredFieldErrors)}");
+
+            // extras_json 最終化
+            tempProduct.ExtrasJson = JsonSerializer.Serialize(new
+            {
+                source_raw = sourceRawDict,
+                processed_columns = extrasDict,
+                csv_headers = headers,
+                physical_line = currentPhysicalLine,
+                data_row_number = dataRowNumber,
+                processing_timestamp = DateTime.UtcNow
+            }, new JsonSerializerOptions { WriteIndented = false });
+
+            _tempProducts.Add(tempProduct);
+        }
+
+        #endregion
+
+        #region フロー7-9: 固定→EAV投影、EAV生成、メタ付与
+
+        /// <summary>
+        /// フロー7-9: 属性マッピングと cl_product_attr 作成
+        /// 7. m_fixed_to_attr_map の適用 (固定→項目コード投影)
+        /// 8. EAV ターゲット生成 (既にフロー4-6で処理済み)
+        /// 9. 補助キー・メタの付与 (batch_id, temp_row_id, attr_seq)
+        /// </summary>
+        private async Task GenerateProductAttributesAsync(
+            string batchId, string groupCompanyCd, List<MDataImportD> importDetails,string dataKind)
+        {
+            // 清空之前添加的所有属性数据(包括 EAV 等),重新生成 PRODUCT_MST 的数据
+            _productAttrs.Clear();
+
+            // 获取所有必要的映射表数据
+            var attrMaps = await _dataService.GetFixedToAttrMapsAsync(groupCompanyCd, dataKind);
+            var attrDefinitions = await _dataService.GetAttrDefinitionsAsync();
+
+            // 从 m_data_import_d 中过滤出 projection_kind == "PRODUCT_MST" 的记录,保持原始顺序
+            var productMstDetails = importDetails
+                .Where(d => d.ProjectionKind == "PRODUCT_MST")
+                .OrderBy(d => d.ColumnSeq)  // 按 column_seq 排序,确保顺序
+                .ToList();
+
+            Console.WriteLine($"处理 PRODUCT_MST 属性: 共 {productMstDetails.Count} 个配置");
+
+            // 打印匹配信息
+            Console.WriteLine($"\n=== 属性映射统计 ===");
+            Console.WriteLine($"m_fixed_to_attr_map 总数: {attrMaps.Count}");
+            foreach (var map in attrMaps)
+            {
+                Console.WriteLine($"  - attr_cd={map.AttrCd}, source_id_column={map.SourceIdColumn}, source_label_column={map.SourceLabelColumn}, value_role={map.ValueRole}");
+            }
+            Console.WriteLine($"PRODUCT_MST 配置总数: {productMstDetails.Count}");
+            foreach (var detail in productMstDetails)
+            {
+                var hasMap = attrMaps.Any(m => m.AttrCd == detail.AttrCd);
+                Console.WriteLine($"  - column_seq={detail.ColumnSeq}, attr_cd={detail.AttrCd}, target_column={detail.TargetColumn}, has_fixed_map={hasMap}");
+            }
+            Console.WriteLine($"===================\n");
 
             foreach (var tempProduct in _tempProducts)
             {
-                // 解析extras_json
-                var extrasRoot = JsonSerializer.Deserialize<Dictionary<string, object>>(tempProduct.ExtrasJson ?? "{}") ?? new Dictionary<string, object>();
-                var processedColumns = new Dictionary<string, object>();
-                if (extrasRoot.ContainsKey("processed_columns") && extrasRoot["processed_columns"] != null)
-                {
-                    try
-                    {
-                        processedColumns = JsonSerializer.Deserialize<Dictionary<string, object>>(extrasRoot["processed_columns"].ToString() ?? "{}") ?? new Dictionary<string, object>();
-                    }
-                    catch
-                    {
-                        processedColumns = new Dictionary<string, object>();
-                    }
-                }
+                // 用于记录已经处理过的 attr_cd (仅针对 m_fixed_to_attr_map 路径)
+                var processedFixedMapAttrCds = new HashSet<string>();
 
-                // A: 固定字段 fallback (如果第三步未生成)
-                foreach (var detail in importDetails.Where(d => !string.IsNullOrEmpty(d.TargetColumn)))
+                // 按 m_data_import_d 的顺序逐条处理,不去重
+                foreach (var detail in productMstDetails)
                 {
+                    // 跳过空的 attr_cd
+                    if (string.IsNullOrEmpty(detail.AttrCd))
+                    {
+                        Console.WriteLine($"[跳过] column_seq={detail.ColumnSeq}, attr_cd 为空");
+                        continue;
+                    }
+
+                    // 尝试从 m_fixed_to_attr_map 中查找匹配
                     var attrMap = attrMaps.FirstOrDefault(m => m.AttrCd == detail.AttrCd);
-                        if (attrMap != null)
-                        {
-                            // 计算该 temp_row_id 下同一 attr_cd 的序号 (attr_seq 从 1 开始)
-                            short attrSeqForRow = (short)(_productAttrs.Count(p => p.TempRowId == tempProduct.TempRowId && p.AttrCd == detail.AttrCd) + 1);
 
-                            // 从固定字段获取值 - 统一使用大写S，并转换为PascalCase
-                            string targetFieldName = "Source" + ToPascalCase(detail.TargetColumn);
-                            var value = GetPropertyValue(tempProduct, targetFieldName);
-
-                        // fallback 从 extras
-                        if (string.IsNullOrEmpty(value) && processedColumns.ContainsKey($"col_{detail.ColumnSeq}"))
+                    if (attrMap != null)
+                    {
+                        // 情况1: 在 m_fixed_to_attr_map 中找到匹配
+                        // 检查是否已经处理过这个 attr_cd
+                        if (processedFixedMapAttrCds.Contains(detail.AttrCd))
                         {
-                            var colData = JsonSerializer.Deserialize<Dictionary<string, object>>(
-                                processedColumns[$"col_{detail.ColumnSeq}"].ToString() ?? "{}");
-                            value = colData?["transformed_value"]?.ToString() ?? "";
+                            Console.WriteLine($"[跳过重复] attr_cd={detail.AttrCd} 已通过 m_fixed_to_attr_map 处理过");
+                            continue;
                         }
 
-                        if (!string.IsNullOrEmpty(value))
-                        {
-                            var productAttr = new ClProductAttr
-                            {
-                                BatchId = batchId,
-                                TempRowId = tempProduct.TempRowId,
-                                AttrCd = detail.AttrCd,
-                                AttrSeq = attrSeqForRow,
-                                SourceId = attrMap.SourceIdColumn,
-                                SourceLabel = attrMap.SourceLabelColumn,
-                                SourceRaw = value,
-                                ValueText = value, // 修复：设置ValueText
-                                DataType = attrMap.DataTypeOverride ?? "TEXT",
-                                QualityFlag = "OK",
-                                QualityDetailJson = "{}",
-                                ProvenanceJson = JsonSerializer.Serialize(new
-                                {
-                                    stage = "INGEST",
-                                    from = "FIXED_FIELD",
-                                    via = "fixed_map",
-                                    profile_id = detail.ProfileId,
-                                    map_id = attrMap.MapId,
-                                    target_column = detail.TargetColumn
-                                }),
-                                RuleVersion = "1.0"
-                            };
+                        Console.WriteLine($"[匹配路径1] attr_cd={detail.AttrCd} 使用 m_fixed_to_attr_map");
+                        ProcessAttributeWithFixedMap(batchId, tempProduct, detail, attrMap, attrDefinitions);
 
-                            _productAttrs.Add(productAttr);
-                            Console.WriteLine($"  ✅ 固定属性投影 (fallback): {detail.AttrCd} = {value} (from {targetFieldName})");
-                        }
+                        // 标记为已处理
+                        processedFixedMapAttrCds.Add(detail.AttrCd);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[匹配路径2] attr_cd={detail.AttrCd} 使用 m_attr_definition");
+                        // 情况2: 没有找到 fixed_map,直接使用 m_attr_definition
+                        ProcessAttributeWithoutFixedMap(batchId, tempProduct, detail, attrDefinitions);
                     }
                 }
-
-                // B & C: EAV 和备份已在第三步处理，这里跳过
-                Console.WriteLine($"  📝 EAV/备份已在第三步处理 (extras_json 已备份)");
             }
 
-            // ステップ9: データベースに保存
-            await SaveProductAttrsToDatabase(_productAttrs);
-            Console.WriteLine($"✓ cl_product_attr保存完了: {_productAttrs.Count} レコード");
+            // データベース保存
+            await _productRepository.SaveProductAttributesAsync(_productAttrs);
+            Console.WriteLine($"cl_product_attr保存完了: {_productAttrs.Count} レコード");
         }
 
-        // ステップ10: バッチ統計更新。
-        private async Task Step10_UpdateBatchStatistics(string batchId, (int readCount, int okCount, int ngCount) result)
+        /// <summary>
+        /// 情况1: 使用 m_fixed_to_attr_map 处理属性
+        /// - 根据 value_role 判断取值方式 (ID_AND_LABEL 或 ID_ONLY)
+        /// - 从 m_attr_definition 获取 data_type
+        /// </summary>
+        private void ProcessAttributeWithFixedMap(
+            string batchId, TempProductParsed tempProduct, MDataImportD detail,
+            MFixedToAttrMap attrMap, List<MAttrDefinition> attrDefinitions)
         {
-            Console.WriteLine("\n--- ステップ10: バッチ統計更新 ---");
+            if (detail.AttrCd == "SALES_RANK")
+            {
+                Console.WriteLine($"SALES_RANK 的 ValueRole 是: {attrMap.ValueRole}");  // 输出 ID_AND_LABEL 或 ID_ONLY
+            }
+            short attrSeqForRow = (short)(_productAttrs.Count(p =>
+                p.TempRowId == tempProduct.TempRowId && p.AttrCd == detail.AttrCd) + 1);
 
+            // 1. 根据 value_role 获取 source_id 和 source_label 的实际值
+            string? sourceIdValue = null;
+            string? sourceLabelValue = null;
+
+            if (attrMap.ValueRole == "ID_AND_LABEL")
+            {
+                // ID_AND_LABEL: 同时取 source_id_column 和 source_label_column 的值
+                // source_id_column 中存储的是字段名 (例: "source_brand_id")
+                // 直接转换为 PascalCase (例: "SourceBrandId") 去 temp_product_parsed 中查找
+                if (!string.IsNullOrEmpty(attrMap.SourceIdColumn))
+                {
+                    string idFieldName = ConvertToPascalCase(attrMap.SourceIdColumn);  // source_brand_id -> SourceBrandId
+                    sourceIdValue = GetTempProductProperty(tempProduct, idFieldName);
+                    Console.WriteLine($"    [读取ID] source_id_column={attrMap.SourceIdColumn} -> 属性名={idFieldName} -> 值={sourceIdValue ?? "(null)"}");
+                }
+
+                if (!string.IsNullOrEmpty(attrMap.SourceLabelColumn))
+                {
+                    string labelFieldName = ConvertToPascalCase(attrMap.SourceLabelColumn);  // source_brand_nm -> SourceBrandNm
+                    sourceLabelValue = GetTempProductProperty(tempProduct, labelFieldName);
+                    Console.WriteLine($"    [读取Label] source_label_column={attrMap.SourceLabelColumn} -> 属性名={labelFieldName} -> 值={sourceLabelValue ?? "(null)"}");
+                }
+            }
+            else if (attrMap.ValueRole == "ID_ONLY")
+            {
+                // ID_ONLY: 只取 source_id_column 的值
+                if (!string.IsNullOrEmpty(attrMap.SourceIdColumn))
+                {
+                    string idFieldName = ConvertToPascalCase(attrMap.SourceIdColumn);
+                    sourceIdValue = GetTempProductProperty(tempProduct, idFieldName);
+                    Console.WriteLine($"    [读取ID_ONLY] source_id_column={attrMap.SourceIdColumn} -> 属性名={idFieldName} -> 值={sourceIdValue ?? "(null)"}");
+                }
+                sourceLabelValue = "";  // ID_ONLY 模式下 source_label 为空
+            }
+
+            // 2. 构建 source_raw 的 JSON
+            // 注意: attrMap.SourceIdColumn 已经包含 source_ 前缀 (例: "source_brand_id")
+            // 直接使用,不需要再添加 source_ 前缀
+            // 例: {"source_brand_id":"4952","source_brand_nm":"ROLEX"}
+            var sourceRawDict = new Dictionary<string, string>();
+
+            if (!string.IsNullOrEmpty(attrMap.SourceIdColumn) && !string.IsNullOrEmpty(sourceIdValue))
+            {
+                sourceRawDict[attrMap.SourceIdColumn] = sourceIdValue;  // 直接使用 source_brand_id
+            }
+
+            if (attrMap.ValueRole == "ID_AND_LABEL" &&
+                !string.IsNullOrEmpty(attrMap.SourceLabelColumn) &&
+                !string.IsNullOrEmpty(sourceLabelValue))
+            {
+                sourceRawDict[attrMap.SourceLabelColumn] = sourceLabelValue;  // 直接使用 source_brand_nm
+            }
+
+            string sourceRaw = JsonSerializer.Serialize(sourceRawDict, new JsonSerializerOptions { WriteIndented = false });
+
+            // 3. 用 attr_cd 去 m_attr_definition 表查找 data_type
+            string? dataType = null;
+            var attrDef = attrDefinitions.FirstOrDefault(ad => ad.AttrCd == detail.AttrCd);
+            if (attrDef != null)
+            {
+                dataType = attrDef.DataType;
+            }
+
+            // 4. 检查是否有值
+            bool hasValue = !string.IsNullOrEmpty(sourceIdValue);
+
+            // 5. 创建属性记录并插入
+            if (hasValue)
+            {
+                var productAttr = new ClProductAttr
+                {
+                    BatchId = batchId,
+                    TempRowId = tempProduct.TempRowId,
+                    AttrCd = detail.AttrCd,
+                    AttrSeq = attrSeqForRow,
+                    SourceId = sourceIdValue ?? "",           // 例: "4952"
+                    SourceLabel = sourceLabelValue ?? "",     // 例: "ROLEX"
+                    SourceRaw = sourceRaw,                    // 例: {"source_brand_id":"4952","source_brand_nm":"ROLEX"}
+                    DataType = dataType                       // 从 m_attr_definition 获取
+                };
+
+                _productAttrs.Add(productAttr);
+                Console.WriteLine($"[FixedMap] 已添加属性: attr_cd={detail.AttrCd}, source_id={sourceIdValue}, source_label={sourceLabelValue}");
+            }
+            else
+            {
+                Console.WriteLine($"[FixedMap] 跳过空值属性: attr_cd={detail.AttrCd}, source_id_column={attrMap.SourceIdColumn}, value_role={attrMap.ValueRole}");
+            }
+        }
+
+        /// <summary>
+        /// 情况2: 不使用 m_fixed_to_attr_map,直接使用 m_attr_definition
+        /// - 从 m_attr_definition 获取 data_type (如果找不到也可以为空)
+        /// - 从 temp_product_parsed 中根据 target_column 获取值
+        /// </summary>
+        private void ProcessAttributeWithoutFixedMap(
+            string batchId, TempProductParsed tempProduct, MDataImportD detail,
+            List<MAttrDefinition> attrDefinitions)
+        {
+            short attrSeqForRow = (short)(_productAttrs.Count(p =>
+                p.TempRowId == tempProduct.TempRowId && p.AttrCd == detail.AttrCd) + 1);
+
+            // 1. 用 attr_cd 去 m_attr_definition 表查找 data_type (可以为空)
+            string? dataType = null;
+            var attrDef = attrDefinitions.FirstOrDefault(ad => ad.AttrCd == detail.AttrCd);
+            if (attrDef != null)
+            {
+                dataType = attrDef.DataType;
+            }
+
+            // 2. 从 temp_product_parsed 中根据 target_column 获取值
+            // 例: target_column = "group_company_cd" → 从 SourceGroupCompanyCd 获取
+            string? value = null;
+            if (!string.IsNullOrEmpty(detail.TargetColumn))
+            {
+                string fieldName = "Source" + ConvertToPascalCase(detail.TargetColumn);
+                value = GetTempProductProperty(tempProduct, fieldName);
+            }
+
+            // 3. 构建 source_raw (使用 source_ 前缀的字段名)
+            // 例: {"source_group_company_cd":"KM"}
+            var sourceRawDict = new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(detail.TargetColumn) && !string.IsNullOrEmpty(value))
+            {
+                string sourceKey = "source_" + detail.TargetColumn;
+                sourceRawDict[sourceKey] = value;
+            }
+
+            string sourceRaw = JsonSerializer.Serialize(sourceRawDict, new JsonSerializerOptions { WriteIndented = false });
+
+            // 4. 检查是否有值
+            bool hasValue = !string.IsNullOrEmpty(value);
+
+            // 5. 创建属性记录并插入
+            if (hasValue)
+            {
+                var productAttr = new ClProductAttr
+                {
+                    BatchId = batchId,
+                    TempRowId = tempProduct.TempRowId,
+                    AttrCd = detail.AttrCd,
+                    AttrSeq = attrSeqForRow,
+                    SourceId = value ?? "",                   // 例: "KM"
+                    SourceLabel = "",                         // 情况2没有 label,为空
+                    SourceRaw = sourceRaw,                    // 例: {"source_group_company_cd":"KM"}
+                    DataType = dataType                       // 从 m_attr_definition 获取 (可以为空)
+                };
+
+                _productAttrs.Add(productAttr);
+                Console.WriteLine($"[NoFixedMap] 已添加属性: attr_cd={detail.AttrCd}, source_id={value}, target_column={detail.TargetColumn}");
+            }
+            else
+            {
+                Console.WriteLine($"[NoFixedMap] 跳过空值属性: attr_cd={detail.AttrCd}, target_column={detail.TargetColumn}");
+            }
+        }
+
+        /// <summary>
+        /// フロー7: 固定フィールド → 項目コード投影 (第1種：PRODUCT_MST 固定列)
+        /// - source_id: m_fixed_to_attr_map.source_id_column で指定された列の値を取得
+        /// - source_label: m_fixed_to_attr_map.source_label_column で指定された列の値を取得
+        /// - source_raw: ID列とLabel列を JSON 形式で組み合わせて保存
+        /// - value_* フィールドは INGEST 段階では未設定（CLEANSE 段階で設定）
+        /// </summary>
+        private void ProjectFixedFieldToAttribute(
+            string batchId, TempProductParsed tempProduct, MFixedToAttrMap attrMap)
+        {
+            short attrSeqForRow = (short)(_productAttrs.Count(p =>
+                p.TempRowId == tempProduct.TempRowId && p.AttrCd == attrMap.AttrCd) + 1);
+
+            // 1. 获取 source_id 的值（从 temp_product_parsed 的指定列）
+            string? sourceIdValue = null;
+            if (!string.IsNullOrEmpty(attrMap.SourceIdColumn))
+            {
+                string idFieldName = "Source" + ConvertToPascalCase(attrMap.SourceIdColumn);
+                sourceIdValue = GetTempProductProperty(tempProduct, idFieldName);
+            }
+
+            // 2. 获取 source_label 的值（从 temp_product_parsed 的指定列）
+            string? sourceLabelValue = null;
+            if (!string.IsNullOrEmpty(attrMap.SourceLabelColumn))
+            {
+                string labelFieldName = "Source" + ConvertToPascalCase(attrMap.SourceLabelColumn);
+                sourceLabelValue = GetTempProductProperty(tempProduct, labelFieldName);
+            }
+
+            // 3. 构建 source_raw 的 JSON（包含 ID 和 Label 的原始字段名和值）
+            var sourceRawDict = new Dictionary<string, string>();
+
+            if (!string.IsNullOrEmpty(attrMap.SourceIdColumn))
+            {
+                sourceRawDict[attrMap.SourceIdColumn] = sourceIdValue ?? "";
+            }
+
+            if (!string.IsNullOrEmpty(attrMap.SourceLabelColumn))
+            {
+                sourceRawDict[attrMap.SourceLabelColumn] = sourceLabelValue ?? "";
+            }
+
+            string sourceRaw = JsonSerializer.Serialize(sourceRawDict, new JsonSerializerOptions { WriteIndented = false });
+
+            // 4. 检查是否有值（ID 或 Label 至少有一个有值）
+            bool hasValue = !string.IsNullOrEmpty(sourceIdValue) || !string.IsNullOrEmpty(sourceLabelValue);
+
+            // 5. 如果有值，创建属性记录
+            if (hasValue)
+            {
+                var productAttr = new ClProductAttr
+                {
+                    BatchId = batchId,
+                    TempRowId = tempProduct.TempRowId,
+                    AttrCd = attrMap.AttrCd,  // 使用 attrMap 的 attr_cd
+                    AttrSeq = attrSeqForRow,
+                    SourceId = sourceIdValue ?? "",       // ID 列的值
+                    SourceLabel = sourceLabelValue ?? "", // Label 列的值
+                    SourceRaw = sourceRaw,                // JSON 格式: {"source_brand_id":"4952","source_brand_nm":"ROLEX"}
+                    ValueText = null,                     // INGEST 段階では未設定
+                    ValueNum = null,
+                    ValueDate = null,
+                    ValueCd = null,
+                    GListItemId = null,
+                    DataType = attrMap.DataTypeOverride,  // m_fixed_to_attr_map で指定されたタイプ
+                    QualityFlag = "OK",
+                    QualityDetailJson = JsonSerializer.Serialize(new
+                    {
+                        empty_value = !hasValue,
+                        processing_stage = "INGEST",
+                        is_required = false,  // m_fixed_to_attr_map には is_required がない
+                        source_id_column = attrMap.SourceIdColumn,
+                        source_label_column = attrMap.SourceLabelColumn
+                    }),
+                    ProvenanceJson = JsonSerializer.Serialize(new
+                    {
+                        stage = "INGEST",
+                        from = "PRODUCT_MST",
+                        via = "fixed_map",
+                        projection_kind = "PRODUCT_MST",
+                        map_id = attrMap.MapId,
+                        source_id_column = attrMap.SourceIdColumn,
+                        source_label_column = attrMap.SourceLabelColumn
+                    }),
+                    RuleVersion = "1.0"
+                };
+
+                _productAttrs.Add(productAttr);
+            }
+        }
+
+        // /// <summary>
+        // /// extras_json から processed_columns を抽出
+        // /// </summary>
+        // private Dictionary<string, object> ExtractProcessedColumns(Dictionary<string, object> extrasRoot)
+        // {
+        //     if (extrasRoot.ContainsKey("processed_columns") && extrasRoot["processed_columns"] != null)
+        //     {
+        //         try
+        //         {
+        //             return JsonSerializer.Deserialize<Dictionary<string, object>>(
+        //                 extrasRoot["processed_columns"].ToString() ?? "{}") ?? new Dictionary<string, object>();
+        //         }
+        //         catch { }
+        //     }
+        //     return new Dictionary<string, object>();
+        // }
+
+        #endregion
+
+        #region フロー10: バッチ統計更新
+
+        /// <summary>
+        /// フロー10: バッチ統計更新
+        /// - batch_run.counts_json の read/ok/ng 更新
+        /// - batch_status を SUCCESS or PARTIAL に更新
+        /// - ended_at = now()
+        /// </summary>
+        private async Task UpdateBatchStatisticsAsync(string batchId, (int readCount, int okCount, int ngCount) result)
+        {
             var batchRun = _batchRuns.FirstOrDefault(b => b.BatchId == batchId);
             if (batchRun != null)
             {
@@ -674,29 +811,70 @@ namespace ProductDataIngestion.Services
                 batchRun.BatchStatus = result.ngCount > 0 ? "PARTIAL" : "SUCCESS";
                 batchRun.EndedAt = DateTime.UtcNow;
 
-                // データベース更新
-                await UpdateBatchRunInDatabase(batchRun);
-
-                Console.WriteLine($"✓ バッチ統計更新: 状態={batchRun.BatchStatus}");
-                Console.WriteLine($"  読込: {result.readCount}, 成功: {result.okCount}, エラー: {result.ngCount}");
+                await _batchRepository.UpdateBatchRunAsync(batchRun);
+                Console.WriteLine($"バッチ統計更新完了: {batchRun.BatchStatus}");
             }
         }
 
-        // 标记批处理为失败。
-        private async Task MarkBatchAsFailed(string batchId, string errorMessage)
+        /// <summary>
+        /// バッチ失敗マーク
+        /// </summary>
+        private async Task MarkBatchAsFailedAsync(string batchId, string errorMessage)
         {
             var batchRun = _batchRuns.FirstOrDefault(b => b.BatchId == batchId);
             if (batchRun != null)
             {
                 batchRun.BatchStatus = "FAILED";
                 batchRun.EndedAt = DateTime.UtcNow;
-                await UpdateBatchRunInDatabase(batchRun);
-                Console.WriteLine($"❌ バッチ失敗: {errorMessage}");
+                await _batchRepository.UpdateBatchRunAsync(batchRun);
+                Console.WriteLine($"バッチ失敗: {errorMessage}");
             }
         }
 
-        // 应用转换表达式到值。
-        private string? ApplyTransformations(string? value, string transformExpr)
+        #endregion
+
+        #region データベース保存 (Repository 経由)
+
+        /// <summary>
+        /// フロー6: temp への保存 (Repository 経由)
+        /// </summary>
+        private async Task SaveToTempTablesAsync()
+        {
+            await _productRepository.SaveTempProductsAsync(_tempProducts);
+            // 注意: _productAttrs 不在这里保存,因为需要在 GenerateProductAttributesAsync 中重新生成
+            // await _productRepository.SaveProductAttributesAsync(_productAttrs);
+            await _productRepository.SaveRecordErrorsAsync(_recordErrors);
+
+            Console.WriteLine($"temp保存完了: 商品={_tempProducts.Count}, エラー={_recordErrors.Count}");
+        }
+
+        #endregion
+
+        #region ヘルパーメソッド
+
+        /// <summary>
+        /// エラーレコード記録
+        /// </summary>
+        private void RecordError(string batchId, long dataRowNumber, int currentPhysicalLine,
+                                string errorMessage, string[]? record)
+        {
+            var error = new RecordError
+            {
+                BatchId = batchId,
+                Step = "INGEST",
+                RecordRef = $"data_row:{dataRowNumber}",
+                ErrorCd = errorMessage.Contains("必須項目") ? "MISSING_REQUIRED_FIELD" : "PARSE_FAILED",
+                ErrorDetail = $"データ行 {dataRowNumber} (物理行 {currentPhysicalLine}): {errorMessage}",
+                RawFragment = string.Join(",", record?.Take(5) ?? Array.Empty<string>())
+            };
+            Console.WriteLine($"エラーレコード: {error.ErrorDetail}");
+            _recordErrors.Add(error);
+        }
+
+        /// <summary>
+        /// transform_expr 適用 (基本は trim(@))
+        /// </summary>
+        private string? ApplyTransformExpression(string? value, string transformExpr)
         {
             if (string.IsNullOrEmpty(value)) return value;
 
@@ -704,75 +882,49 @@ namespace ProductDataIngestion.Services
 
             if (!string.IsNullOrEmpty(transformExpr))
             {
-                // 支持多种转换表达式
-                if (transformExpr.Contains("trim(@)"))
-                {
-                    result = result.Trim();
-                }
-                if (transformExpr.Contains("upper(@)"))
-                {
-                    result = result.ToUpper();
-                }
-                if (transformExpr.Contains("lower(@)"))
-                {
-                    result = result.ToLower();
-                }
-                // 可以添加更多转换规则
-                if (transformExpr.Contains("to_timestamp(@,'YYYY-MM-DD')"))
-                {
-                    // 日期转换逻辑
-                }
+                if (transformExpr.Contains("trim(@)")) result = result.Trim();
+                if (transformExpr.Contains("upper(@)")) result = result.ToUpper();
+                if (transformExpr.Contains("lower(@)")) result = result.ToLower();
             }
 
             return result;
         }
 
-        // 设置对象属性值 - 改进版本，添加更多调试
-        private bool SetPropertyValue(TempProductParsed obj, string propertyName, string? value)
+        /// <summary>
+        /// TempProductParsed プロパティ値設定
+        /// </summary>
+        private bool SetTempProductProperty(TempProductParsed obj, string propertyName, string? value)
         {
             try
             {
-                // 首先尝试精确匹配
                 var property = typeof(TempProductParsed).GetProperty(propertyName);
                 if (property != null && property.CanWrite)
                 {
                     property.SetValue(obj, value);
-                    Console.WriteLine($"    ✅ 精确匹配成功: {propertyName} = '{value}'");
                     return true;
                 }
-                
-                // 尝试忽略大小写匹配
-                property = typeof(TempProductParsed).GetProperty(propertyName, 
+
+                property = typeof(TempProductParsed).GetProperty(propertyName,
                     BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
-                
+
                 if (property != null && property.CanWrite)
                 {
                     property.SetValue(obj, value);
-                    Console.WriteLine($"    ✅ 忽略大小写匹配成功: {propertyName} = '{value}'");
                     return true;
                 }
-                
-                Console.WriteLine($"⚠️ 属性不存在: {propertyName}");
-                
-                // 额外调试：列出所有可写Source属性
-                var allProps = typeof(TempProductParsed).GetProperties()
-                    .Where(p => p.Name.StartsWith("Source") && p.CanWrite)
-                    .Select(p => p.Name)
-                    .OrderBy(n => n)
-                    .ToList();
-                Console.WriteLine($"    所有可用Source属性 ({allProps.Count}): {string.Join(", ", allProps)}");
-                
+
                 return false;
             }
-            catch (Exception ex)
+            catch
             {
-                Console.WriteLine($"❌ 设置属性失败 {propertyName}: {ex.Message}");
                 return false;
             }
         }
 
-        // 获取对象属性值。
-        private string? GetPropertyValue(TempProductParsed obj, string propertyName)
+        /// <summary>
+        /// TempProductParsed プロパティ値取得
+        /// </summary>
+        private string? GetTempProductProperty(TempProductParsed obj, string propertyName)
         {
             try
             {
@@ -780,7 +932,7 @@ namespace ProductDataIngestion.Services
                     propertyName,
                     BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance
                 );
-                
+
                 return property?.GetValue(obj) as string;
             }
             catch
@@ -789,10 +941,79 @@ namespace ProductDataIngestion.Services
             }
         }
 
-        // 根据字符代码获取编码。
-        private Encoding GetEncoding(string characterCd)
+        /// <summary>
+        /// snake_case → PascalCase 変換
+        /// </summary>
+        private string ConvertToPascalCase(string input)
         {
-            return characterCd.ToUpperInvariant() switch
+            if (string.IsNullOrEmpty(input)) return input;
+
+            var parts = input.Split(new char[] { '_', '-' }, StringSplitOptions.RemoveEmptyEntries);
+            return string.Concat(parts.Select(part =>
+                char.ToUpperInvariant(part[0]) + part.Substring(1).ToLowerInvariant()));
+        }
+
+        /// <summary>
+        /// GP会社コード検証
+        /// </summary>
+        private async Task ValidateCompanyCodeAsync(string groupCompanyCd)
+        {
+            if (string.IsNullOrWhiteSpace(groupCompanyCd))
+                throw new ArgumentException("GP会社コードが指定されていません", nameof(groupCompanyCd));
+
+            try
+            {
+                using var connection = new NpgsqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var sql = @"
+                    SELECT group_company_id as GroupCompanyId, group_company_cd as GroupCompanyCd,
+                           group_company_nm as GroupCompanyNm, default_currency_cd as DefaultCurrencyCd,
+                           is_active as IsActive, cre_at as CreAt, upd_at as UpdAt
+                    FROM m_company
+                    WHERE group_company_cd = @GroupCompanyCd AND is_active = true";
+
+                var company = await connection.QueryFirstOrDefaultAsync<MCompany>(
+                    sql, new { GroupCompanyCd = groupCompanyCd });
+
+                if (company == null)
+                    throw new Exception($"GP会社コードが存在しないか無効です: {groupCompanyCd}");
+
+                if (!company.IsValid())
+                    throw new Exception($"GP会社コードのデータが無効です: {groupCompanyCd}");
+
+                Console.WriteLine($"GP会社検証成功: {company.GroupCompanyCd} - {company.GroupCompanyNm}");
+            }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
+            {
+                await ValidateCompanyCodeSimpleAsync(groupCompanyCd);
+            }
+            catch (Exception ex) when (ex is not ImportException)
+            {
+                await ValidateCompanyCodeSimpleAsync(groupCompanyCd);
+            }
+        }
+
+        /// <summary>
+        /// GP会社コード簡易検証
+        /// </summary>
+        private async Task ValidateCompanyCodeSimpleAsync(string groupCompanyCd)
+        {
+            var validCompanyCodes = new[] { "KM", "RKE", "KBO" };
+
+            if (!validCompanyCodes.Contains(groupCompanyCd.ToUpper()))
+                throw new Exception($"GP会社コードが認識されません: {groupCompanyCd}");
+
+            Console.WriteLine($"GP会社コード簡易検証: {groupCompanyCd}");
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// 文字コード取得
+        /// </summary>
+        private Encoding GetEncodingFromCharacterCode(string characterCd)
+        {
+            return characterCd?.ToUpperInvariant() switch
             {
                 "UTF-8" => Encoding.UTF8,
                 "SHIFT_JIS" => Encoding.GetEncoding("Shift_JIS"),
@@ -801,240 +1022,6 @@ namespace ProductDataIngestion.Services
             };
         }
 
-        // 保存批处理运行到数据库。
-        private async Task SaveBatchRunToDatabase(BatchRun batchRun)
-        {
-            try
-            {
-                using var connection = new NpgsqlConnection(_connectionString);
-                await connection.OpenAsync();
-                
-                var parameters = new
-                {
-                    BatchId = batchRun.BatchId,
-                    IdemKey = batchRun.IdemKey,
-                    S3Bucket = batchRun.S3Bucket,
-                    Etag = batchRun.Etag,
-                    GroupCompanyCd = batchRun.GroupCompanyCd,
-                    DataKind = batchRun.DataKind,
-                    FileKey = batchRun.FileKey,
-                    BatchStatus = batchRun.BatchStatus,
-                    CountsJson = batchRun.CountsJson,
-                    StartedAt = batchRun.StartedAt,
-                    EndedAt = batchRun.EndedAt,
-                    CreAt = DateTime.UtcNow,
-                    UpdAt = DateTime.UtcNow
-                };
-                
-                var sql = @"INSERT INTO batch_run 
-                            (batch_id, idem_key, s3_bucket, etag, group_company_cd, 
-                             data_kind, file_key, batch_status, counts_json, 
-                             started_at, ended_at, cre_at, upd_at) 
-                            VALUES (@BatchId, @IdemKey, @S3Bucket, @Etag, @GroupCompanyCd, 
-                                    @DataKind, @FileKey, @BatchStatus, @CountsJson::jsonb, 
-                                    @StartedAt, @EndedAt, @CreAt, @UpdAt)";
-                
-                await connection.ExecuteAsync(sql, parameters);
-                
-                Console.WriteLine($"✅ バッチ情報をデータベースに保存しました: {batchRun.BatchId}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ バッチ情報保存エラー: {ex.Message}");
-                throw;
-            }
-        }
-
-        // 更新批处理运行在数据库。
-        private async Task UpdateBatchRunInDatabase(BatchRun batchRun)
-        {
-            try
-            {
-                using var connection = new NpgsqlConnection(_connectionString);
-                await connection.OpenAsync();
-                
-                var parameters = new
-                {
-                    BatchId = batchRun.BatchId,
-                    BatchStatus = batchRun.BatchStatus,
-                    CountsJson = batchRun.CountsJson,
-                    EndedAt = batchRun.EndedAt,
-                    UpdAt = DateTime.UtcNow
-                };
-                
-                var sql = @"UPDATE batch_run 
-                            SET batch_status = @BatchStatus, 
-                                counts_json = @CountsJson::jsonb,
-                                ended_at = @EndedAt,
-                                upd_at = @UpdAt
-                            WHERE batch_id = @BatchId";
-                
-                await connection.ExecuteAsync(sql, parameters);
-                
-                Console.WriteLine($"✅ バッチ状態を更新しました: {batchRun.BatchId} -> {batchRun.BatchStatus}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ バッチ状態更新エラー: {ex.Message}");
-                throw;
-            }
-        }
-
-        // 实际的保存方法 - 替换现有的模拟方法
-        private async Task SaveTempProductsToDatabase(List<TempProductParsed> products)
-        {
-            if (products.Count == 0) return;
-
-            try
-            {
-                using var connection = new NpgsqlConnection(_connectionString);
-                await connection.OpenAsync();
-
-                var insertSql = @"
-                    INSERT INTO temp_product_parsed (
-                        temp_row_id, batch_id, line_no, source_group_company_cd,
-                        source_product_cd, source_product_management_cd,
-                        source_brand_id, source_brand_nm,
-                        source_category_1_id, source_category_1_nm,
-                        source_category_2_id, source_category_2_nm,
-                        source_category_3_id, source_category_3_nm,
-                        source_product_status_cd, source_product_status_nm,
-                        source_new_used_kbn, source_quantity,
-                        source_stock_existence_cd, source_stock_existence_nm,
-                        source_sale_permission_cd, source_sale_permission_nm,
-                        source_transfer_status, source_repair_status,
-                        source_reservation_status, source_consignment_status,
-                        source_accept_status, source_ec_listing_kbn,
-                        source_assessment_price_excl_tax, source_assessment_price_incl_tax,
-                        source_assessment_tax_rate, source_purchase_price_excl_tax,
-                        source_purchase_price_incl_tax, source_purchase_tax_rate,
-                        source_display_price_excl_tax, source_display_price_incl_tax,
-                        source_display_tax_rate, source_sales_price_excl_tax,
-                        source_sales_price_incl_tax, source_sales_tax_rate,
-                        source_purchase_rank, source_purchase_rank_name,
-                        source_sales_rank, source_sales_rank_name,
-                        source_sales_channel_nm, source_sales_channel_region,
-                        source_sales_channel_method, source_sales_channel_target,
-                        source_purchase_channel_nm, source_purchase_channel_region,
-                        source_purchase_channel_method, source_purchase_channel_target,
-                        source_store_id, source_store_nm,
-                        source_consignor_group_company_id, source_consignor_product_cd,
-                        extras_json, step_status
-                    ) VALUES (
-                        @TempRowId, @BatchId, @LineNo, @SourceGroupCompanyCd,
-                        @SourceProductCd, @SourceProductManagementCd,
-                        @SourceBrandId, @SourceBrandNm,
-                        @SourceCategory1Id, @SourceCategory1Nm,
-                        @SourceCategory2Id, @SourceCategory2Nm,
-                        @SourceCategory3Id, @SourceCategory3Nm,
-                        @SourceProductStatusCd, @SourceProductStatusNm,
-                        @SourceNewUsedKbn, @SourceQuantity,
-                        @SourceStockExistenceCd, @SourceStockExistenceNm,
-                        @SourceSalePermissionCd, @SourceSalePermissionNm,
-                        @SourceTransferStatus, @SourceRepairStatus,
-                        @SourceReservationStatus, @SourceConsignmentStatus,
-                        @SourceAcceptStatus, @SourceEcListingKbn,
-                        @SourceAssessmentPriceExclTax, @SourceAssessmentPriceInclTax,
-                        @SourceAssessmentTaxRate, @SourcePurchasePriceExclTax,
-                        @SourcePurchasePriceInclTax, @SourcePurchaseTaxRate,
-                        @SourceDisplayPriceExclTax, @SourceDisplayPriceInclTax,
-                        @SourceDisplayTaxRate, @SourceSalesPriceExclTax,
-                        @SourceSalesPriceInclTax, @SourceSalesTaxRate,
-                        @SourcePurchaseRank, @SourcePurchaseRankName,
-                        @SourceSalesRank, @SourceSalesRankName,
-                        @SourceSalesChannelNm, @SourceSalesChannelRegion,
-                        @SourceSalesChannelMethod, @SourceSalesChannelTarget,
-                        @SourcePurchaseChannelNm, @SourcePurchaseChannelRegion,
-                        @SourcePurchaseChannelMethod, @SourcePurchaseChannelTarget,
-                        @SourceStoreId, @SourceStoreNm,
-                        @SourceConsignorGroupCompanyId, @SourceConsignorProductCd,
-                        @ExtrasJson::jsonb, @StepStatus
-                    ) ON CONFLICT (temp_row_id) DO NOTHING";
-
-                await connection.ExecuteAsync(insertSql, products);
-                Console.WriteLine($"成功保存 {products.Count} 条商品数据到临时表");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"保存到临时表时发生错误: {ex.Message}");
-                Console.WriteLine($"详细错误: {ex}");
-                throw;
-            }
-        }
-
-        // 同様に SaveProductAttrsToDatabase メソッドも修正
-        private async Task SaveProductAttrsToDatabase(List<ClProductAttr> attrs)
-        {
-            if (attrs.Count == 0) return;
-
-            try
-            {
-                using var connection = new NpgsqlConnection(_connectionString);
-                await connection.OpenAsync();
-
-                var sql = @"
-                    INSERT INTO cl_product_attr (
-                        batch_id, temp_row_id, attr_cd, attr_seq,
-                        source_id, source_label, source_raw, value_text,
-                        value_num, value_date, value_cd, g_list_item_id,
-                        data_type, quality_flag, quality_detail_json, provenance_json,
-                        rule_version, cre_at, upd_at
-                    ) VALUES (
-                        @BatchId, @TempRowId, @AttrCd, @AttrSeq,
-                        @SourceId, @SourceLabel, @SourceRaw, @ValueText,
-                        @ValueNum, @ValueDate, @ValueCd, @GListItemId,
-                        @DataType, @QualityFlag, @QualityDetailJson::jsonb, @ProvenanceJson::jsonb,
-                        @RuleVersion, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    ) ON CONFLICT (batch_id, temp_row_id, attr_cd, attr_seq) DO NOTHING";
-
-                await connection.ExecuteAsync(sql, attrs);
-                Console.WriteLine($"✅ cl_product_attr保存: {attrs.Count} レコード");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ cl_product_attr保存エラー: {ex.Message}");
-                throw;
-            }
-        }
-
-        // 保存记录错误到数据库（简易实现）。
-        private async Task SaveRecordErrorsToDatabase(List<RecordError> errors)
-        {
-            if (errors.Count == 0) return;
-
-            try
-            {
-                using var connection = new NpgsqlConnection(_connectionString);
-                await connection.OpenAsync();
-
-                var sql = @"
-                    INSERT INTO record_error (
-                        batch_id, step, record_ref, error_cd, error_detail, raw_fragment,
-                        cre_at, upd_at
-                    ) VALUES (
-                        @BatchId, @Step, @RecordRef, @ErrorCd, @ErrorDetail, @RawFragment,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    ) ON CONFLICT (batch_id) DO NOTHING";
-
-                await connection.ExecuteAsync(sql, errors);
-                Console.WriteLine($"✅ record_error保存: {errors.Count} レコード");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ record_error保存エラー: {ex.Message}");
-                throw;
-            }
-        }
-
-        // 获取处理结果描述
-        private string GetProcessingResult(MDataImportD detail, string? value)
-        {
-            if (!string.IsNullOrEmpty(detail.TargetColumn))
-                return $"FIXED_FIELD:Source{ToPascalCase(detail.TargetColumn)}";
-            else if (!string.IsNullOrEmpty(detail.AttrCd))
-                return $"EAV_ATTR:{detail.AttrCd}";
-            else
-                return "BACKUP_ONLY";
-        }
+        #endregion
     }
 }

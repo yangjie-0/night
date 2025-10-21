@@ -1,4 +1,4 @@
-version: '3.8'
+version: '4.8'
 
 services:
   postgres:
@@ -18,3 +18,5 @@ services:
 volumes:
   pgdata:
   pgadmin_data:
+  
+  
