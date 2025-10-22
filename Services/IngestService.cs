@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using ProductDataIngestion.Models;
 using ProductDataIngestion.Repositories;
+using ProductDataIngestion.Repositories.Interfaces;
 using Npgsql;
 using Dapper;
 using System.Reflection;
@@ -20,6 +21,7 @@ namespace ProductDataIngestion.Services
         private readonly DataImportService _dataService;
         private readonly IBatchRepository _batchRepository;
         private readonly IProductRepository _productRepository;
+        private readonly IDataImportRepository _dataRepository;
         private readonly CsvValidator _csvValidator;
         private readonly AttributeProcessor _attributeProcessor;
         private readonly string _connectionString;
@@ -37,7 +39,7 @@ namespace ProductDataIngestion.Services
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
             _batchRepository = batchRepository ?? throw new ArgumentNullException(nameof(batchRepository));
             _productRepository = productRepository ?? throw new ArgumentNullException(nameof(productRepository));
-            _dataService = new DataImportService(connectionString);
+            _dataService = new DataImportService(_dataRepository);
             _csvValidator = new CsvValidator();
             _attributeProcessor = new AttributeProcessor(_dataService);
         }
@@ -366,78 +368,98 @@ namespace ProductDataIngestion.Services
             var sourceRawDict = new Dictionary<string, string>();
             var requiredFieldErrors = new List<string>();
 
+            // 列ごとのルールグループ化（column_seq 単位）
+            var groupedDetails = importDetails
+                .OrderBy(d => d.ColumnSeq)
+                .ThenBy(d => d.ProjectionKind)  // PRODUCT優先（安定化）
+                .GroupBy(d => d.ColumnSeq)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
             // すべての列を処理して extras_json に保存
             // （is_required に関わらず、PRODUCT と PRODUCT_EAV の両方）
-            foreach (var detail in importDetails.OrderBy(d => d.ColumnSeq))
+            foreach (var kvp in groupedDetails)
             {
+                int colSeq = kvp.Key;
+                var detailsForCol = kvp.Value;  // 該列の全ルール（多条可）
                 string? rawValue = null;
-                string? transformedValue = null;
                 string headerName = "N/A";
-                bool isInjectedValue = false;
+                bool isInjectedValue = (colSeq == 0);
 
-                // column_seq = 0: 公司コード注入
-                if (detail.ColumnSeq == 0)
+                if (colSeq == 0)
                 {
-                    rawValue = transformedValue = groupCompanyCd;
+                    // 注入列: 会社コード固定値
+                    rawValue = groupCompanyCd;
                     headerName = "[注入:group_company_cd]";
-                    isInjectedValue = true;
-                }
-                // column_seq > 0: CSV列番号 (1始まり)、配列インデックスは -1
-                else if (detail.ColumnSeq > 0)
-                {
-                    int csvIndex = detail.ColumnSeq - 1;
-
-                    // CSV範囲外チェック: ヘッダー範囲とレコード範囲の両方をチェック
-                    if (csvIndex >= headers.Length || csvIndex >= record.Length)
-                    {
-                        continue;
-                    }
-
-                    rawValue = record[csvIndex];
-                    headerName = headers[csvIndex];
-                    transformedValue = ApplyTransformExpression(rawValue, detail.TransformExpr ?? "");
                 }
                 else
                 {
+                    // CSV列: 範囲チェック
+                    int csvIndex = colSeq - 1;
+                    if (csvIndex >= headers.Length || csvIndex >= record.Length)
+                    {
+                        continue;  // 範囲外スキップ
+                    }
+                    rawValue = record[csvIndex];
+                    headerName = headers[csvIndex];
+
+                    // 生値バックアップ（CSVのみ）
+                    string backupKey = headerName;
+                    sourceRawDict[backupKey] = rawValue ?? "";
+                }
+
+                // 無ルール: エラー記録
+                if (!detailsForCol.Any())
+                {   
+                    var profileId = importDetails.FirstOrDefault()?.ProfileId ?? 0L;  // デフォルト0（エラー時）
+                    var noRuleEx = new IngestException(
+                        ErrorCodes.MAPPING_NOT_FOUND,
+                        $"列 {colSeq} の取込ルールが見つかりません（profile_id: {profileId}）",
+                        recordRef: $"column:{colSeq}"
+                    );
+                    RecordIngestError(batchId, dataRowNumber, currentPhysicalLine, noRuleEx, record);
                     continue;
                 }
 
-                // 元CSV値を source_raw として保持
-                string backupKey = isInjectedValue ? $"_injected_{detail.TargetColumn}" : headerName;
-                sourceRawDict[backupKey] = rawValue ?? "";
-
-                // データ格納 (固定フィールド or EAV準備)
-                bool? mappingSuccess = null;
-
-                // 固定フィールドへマッピング
-                if (!string.IsNullOrEmpty(detail.TargetColumn) &&
-                    (detail.ProjectionKind == "PRODUCT"))
+               // 全ルール処理（CSV値共有、変換独立）
+                int subIndex = 0;
+                foreach (var detail in detailsForCol)
                 {
-                    string propertyName = "Source" + ConvertToPascalCase(detail.TargetColumn);
-                    mappingSuccess = SetTempProductProperty(tempProduct, propertyName, transformedValue);
-                }
+                    string? transformedValue = ApplyTransformExpression(rawValue, detail.TransformExpr ?? "");
 
-                // extras_json 用の詳細情報保存
-                // すべての列（PRODUCT と PRODUCT_EAV）を保存
-                extrasDict[$"col_{detail.ColumnSeq}"] = new
-                {
-                    csv_column_index = detail.ColumnSeq,
-                    header = headerName,
-                    raw_value = rawValue ?? "",
-                    transformed_value = transformedValue ?? "",
-                    target_column = detail.TargetColumn ?? "",
-                    projection_kind = detail.ProjectionKind ?? "",
-                    attr_cd = detail.AttrCd ?? "",
-                    transform_expr = detail.TransformExpr ?? "",
-                    is_required = detail.IsRequired,
-                    is_injected = isInjectedValue,
-                    mapping_success = mappingSuccess
-                };
+                    // FIXEDフィールド反映（PRODUCT限定）
+                    bool mappingSuccess = false;
+                    if (!string.IsNullOrEmpty(detail.TargetColumn) &&
+                        detail.ProjectionKind == "PRODUCT"&& 
+                        detail.IsRequired)  
+                    {
+                        string propertyName = "source" + ConvertToPascalCase(detail.TargetColumn);
+                        mappingSuccess = SetTempProductProperty(tempProduct, propertyName, transformedValue);
+                    }
 
-                // 必須フィールドチェック: is_required = true で値が空の場合はエラー
-                if (detail.IsRequired && string.IsNullOrWhiteSpace(transformedValue))
-                {
-                    requiredFieldErrors.Add($"列 {detail.ColumnSeq} ({detail.AttrCd}): 必須項目が空です");
+                    // extras_jsonに保存（ユニーク化:col_XX_ATTR_CD）
+                    string uniqueKey = string.IsNullOrEmpty(detail.AttrCd) 
+                        ? $"col_{colSeq}_sub{subIndex++}"  // AttrCd空時、数字を利用する
+                        : $"col_{colSeq}_{detail.AttrCd.Replace(":", "_")}";  // e.g., "col_0_GROUP_COMPANY_CD"
+                    extrasDict[uniqueKey] = new
+                    {
+                        csv_column_index = colSeq,
+                        header = headerName,
+                        raw_value = rawValue ?? "",
+                        transformed_value = transformedValue ?? "",
+                        target_column = detail.TargetColumn ?? "",
+                        projection_kind = detail.ProjectionKind,
+                        attr_cd = detail.AttrCd ?? "",
+                        transform_expr = detail.TransformExpr ?? "",
+                        is_required = detail.IsRequired,
+                        is_injected = false,
+                        mapping_success = mappingSuccess
+                    };
+
+                    // 必須チェック（true時のみ）
+                    if (detail.IsRequired && string.IsNullOrWhiteSpace(transformedValue))
+                    {
+                        requiredFieldErrors.Add($"列 {colSeq} ({detail.AttrCd}): 必須項目空");
+                    }
                 }
             }
 
@@ -473,6 +495,7 @@ namespace ProductDataIngestion.Services
         {
             try
             {
+                //全てのtempProductを処理して、cl_product_attrを生成
                 var allProductAttrs = new List<ClProductAttr>();
 
                 foreach (var tempProduct in _tempProducts)

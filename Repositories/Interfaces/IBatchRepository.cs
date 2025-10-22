@@ -1,6 +1,6 @@
 using ProductDataIngestion.Models;
 
-namespace ProductDataIngestion.Repositories
+namespace ProductDataIngestion.Repositories.Interfaces
 {
     // バッチ実行情報のリポジトリインターフェース
     public interface IBatchRepository

@@ -23,4 +23,11 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Exclude test files from main project compilation -->
+    <Compile Remove="ProductDataIngestion.Tests\**" />
+    <EmbeddedResource Remove="ProductDataIngestion.Tests\**" />
+    <None Remove="ProductDataIngestion.Tests\**" />
+  </ItemGroup>
+
 </Project>

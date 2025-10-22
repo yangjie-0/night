@@ -1,4 +1,5 @@
 using ProductDataIngestion.Services;
+using ProductDataIngestion.Repositories;
 using Microsoft.Extensions.Configuration;  // JSON設定読み込み用
 
 class Program
@@ -39,7 +40,8 @@ class Program
             // 在执行导入之前，先打印 m_data_import_d 的前几条映射以便排查
             try
             {
-                var dataService = new ProductDataIngestion.Services.DataImportService(connectionString);
+                var dataRepository = new DataImportRepository(connectionString);
+                var dataService = new DataImportService(dataRepository);
                 string usageNm = $"{groupCompanyCd}-PRODUCT";
                 Console.WriteLine($"\n--- 尝试读取 ImportSetting (usage: {usageNm}) ---");
                 var setting = await dataService.GetImportSettingAsync(groupCompanyCd, usageNm);

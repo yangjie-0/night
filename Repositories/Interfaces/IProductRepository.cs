@@ -1,6 +1,6 @@
 using ProductDataIngestion.Models;
 
-namespace ProductDataIngestion.Repositories
+namespace ProductDataIngestion.Repositories.Interfaces
 {
     // 商品データのリポジトリインターフェース
     public interface IProductRepository

@@ -1,68 +1,87 @@
+using ProductDataIngestion.Models;
+
 namespace ProductDataIngestion.Services
 {
     /// <summary>
     /// Ingest処理のカスタム例外クラス
-    /// 設計書に基づいたエラー分類コードを保持
+    /// ErrorDetailモデルを使用してエラー情報を構造化
     /// </summary>
     public class IngestException : Exception
     {
-        public string ErrorCode { get; set; }
-        public string RecordRef { get; set; }
-        public string RawFragment { get; set; }
+        /// <summary>
+        /// エラー詳細情報
+        /// </summary>
+        public ErrorDetail ErrorDetail { get; }
 
-        public IngestException(string errorCode, string message, string recordRef = "", string rawFragment = "")
+        /// <summary>
+        /// コンストラクタ (ErrorDetail使用)
+        /// </summary>
+        /// <param name="errorDetail">エラー詳細情報</param>
+        public IngestException(ErrorDetail errorDetail)
+            : base(errorDetail.Message)
+        {
+            ErrorDetail = errorDetail;
+        }
+
+        /// <summary>
+        /// コンストラクタ (ErrorDetail + 内部例外)
+        /// </summary>
+        /// <param name="errorDetail">エラー詳細情報</param>
+        /// <param name="innerException">内部例外</param>
+        public IngestException(ErrorDetail errorDetail, Exception innerException)
+            : base(errorDetail.Message, innerException)
+        {
+            ErrorDetail = errorDetail;
+        }
+
+        /// <summary>
+        /// コンストラクタ (簡易版 - 下位互換性のため)
+        /// </summary>
+        /// <param name="errorCode">エラーコード</param>
+        /// <param name="message">エラーメッセージ</param>
+        /// <param name="recordRef">レコード参照</param>
+        /// <param name="rawFragment">生データ断片</param>
+        public IngestException(string errorCode, string message, string? recordRef = null, string? rawFragment = null)
             : base(message)
         {
-            ErrorCode = errorCode;
-            RecordRef = recordRef;
-            RawFragment = rawFragment;
+            ErrorDetail = new ErrorDetail(errorCode, message, recordRef, rawFragment);
         }
 
-        public IngestException(string errorCode, string message, Exception innerException, string recordRef = "", string rawFragment = "")
+        /// <summary>
+        /// コンストラクタ (簡易版 + 内部例外 - 下位互換性のため)
+        /// </summary>
+        /// <param name="errorCode">エラーコード</param>
+        /// <param name="message">エラーメッセージ</param>
+        /// <param name="innerException">内部例外</param>
+        /// <param name="recordRef">レコード参照</param>
+        /// <param name="rawFragment">生データ断片</param>
+        public IngestException(string errorCode, string message, Exception innerException, string? recordRef = null, string? rawFragment = null)
             : base(message, innerException)
         {
-            ErrorCode = errorCode;
-            RecordRef = recordRef;
-            RawFragment = rawFragment;
+            ErrorDetail = new ErrorDetail(errorCode, message, recordRef, rawFragment);
         }
-    }
 
-    /// <summary>
-    /// エラーコード定数 (設計書に基づく)
-    /// </summary>
-    public static class ErrorCodes
-    {
-        // CSV解析エラー
-        public const string PARSE_FAILED = "PARSE_FAILED";
+        /// <summary>
+        /// 便利プロパティ: ErrorCode (下位互換性のため)
+        /// </summary>
+        public string ErrorCode => ErrorDetail.ErrorCode;
 
-        // 必須列エラー
-        public const string MISSING_COLUMN = "MISSING_COLUMN";
+        /// <summary>
+        /// 便利プロパティ: RecordRef (下位互換性のため)
+        /// </summary>
+        public string? RecordRef => ErrorDetail.RecordRef;
 
-        // 空レコードエラー
-        public const string EMPTY_RECORD = "EMPTY_RECORD";
+        /// <summary>
+        /// 便利プロパティ: RawFragment (下位互換性のため)
+        /// </summary>
+        public string? RawFragment => ErrorDetail.RawFragment;
 
-        // 必須フィールド空エラー
-        public const string REQUIRED_FIELD_EMPTY = "REQUIRED_FIELD_EMPTY";
-
-        // 文字コードエラー
-        public const string INVALID_ENCODING = "INVALID_ENCODING";
-
-        // 行サイズ超過
-        public const string ROW_TOO_LARGE = "ROW_TOO_LARGE";
-
-        // 型変換エラー
-        public const string CAST_NUM_FAILED = "CAST_NUM_FAILED";
-        public const string CAST_DATE_FAILED = "CAST_DATE_FAILED";
-        public const string CAST_BOOL_FAILED = "CAST_BOOL_FAILED";
-
-        // マッピングエラー
-        public const string MAPPING_NOT_FOUND = "MAPPING_NOT_FOUND";
-
-        // データベースエラー
-        public const string DB_ERROR = "DB_ERROR";
-
-        // ファイル移動エラー
-        public const string S3_MOVE_FAILED = "S3_MOVE_FAILED";
-        public const string LOCAL_MOVE_FAILED = "LOCAL_MOVE_FAILED";
+        /// <summary>
+        /// 例外の文字列表現
+        /// </summary>
+        public override string ToString()
+        {
+            return $"{ErrorDetail}\n{base.ToString()}";
+        }
     }
 }

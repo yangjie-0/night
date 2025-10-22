@@ -1,6 +1,7 @@
 using Npgsql;
 using Dapper;
 using ProductDataIngestion.Models;
+using ProductDataIngestion.Repositories.Interfaces;
 
 namespace ProductDataIngestion.Repositories
 {
