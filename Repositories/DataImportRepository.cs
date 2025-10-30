@@ -54,7 +54,7 @@ namespace ProductDataIngestion.Repositories
             SELECT
                 map_id as MapId,
                 group_company_cd as GroupCompanyCd,
-                data_kind as DataKind,
+                projection_kind as ProjectionKind,
                 attr_cd as AttrCd,
                 source_id_column as SourceIdColumn,
                 source_label_column as SourceLabelColumn,
@@ -66,7 +66,7 @@ namespace ProductDataIngestion.Repositories
                 fixed_remarks as FixedRemarks
             FROM m_fixed_to_attr_map
             WHERE group_company_cd = @GroupCompanyCd
-                AND data_kind = @DataKind
+                AND projection_kind = @ProjectionKind
                 AND is_active = true
             ORDER BY priority";
 
@@ -101,20 +101,28 @@ namespace ProductDataIngestion.Repositories
             ORDER BY attr_sort_no NULLS LAST, attr_id";
     }
 
-    /// データインポートリポジトリ実装クラス
+    /// <summary>
+    /// データ取り込みに関するDBアクセス実装。
+    /// m_data_import_setting, m_data_import_d, m_fixed_to_attr_map, m_attr_definition などの取得を行う。
+    /// </summary>
     public class DataImportRepository : IDataImportRepository
     {
         private readonly string _connectionString;
         private readonly ILogger<DataImportRepository>? _logger;
 
-        /// コンストラクタ：接続文字列とロガーを注入
+        /// <summary>
+        /// コンストラクタ：接続文字列と任意のロガーを受け取る。
+        /// </summary>
         public DataImportRepository(string connectionString, ILogger<DataImportRepository>? logger = null)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
             _logger = logger;
         }
 
-        /// インポート設定取得：存在しない場合例外
+        /// <summary>
+        /// 指定した groupCompanyCd と usageNm に対応するインポート設定を取得する。
+        /// 見つからない場合は ImportException を投げる。
+        /// </summary>
         public async Task<MDataImportSetting> GetImportSettingAsync(string groupCompanyCd, string usageNm)
         {
             using var connection = new NpgsqlConnection(_connectionString);
@@ -132,7 +140,9 @@ namespace ProductDataIngestion.Repositories
             return setting;
         }
 
-        /// インポート明細取得
+        /// <summary>
+        /// 指定プロファイルIDに紐づくインポート明細（カラム定義）を取得する。
+        /// </summary>
         public async Task<List<MDataImportD>> GetImportDetailsAsync(long profileId)
         {
             using var connection = new NpgsqlConnection(_connectionString);
@@ -141,16 +151,21 @@ namespace ProductDataIngestion.Repositories
                 new { ProfileId = profileId })).ToList();
         }
 
-        /// 固定属性マッピング取得
-        public async Task<List<MFixedToAttrMap>> GetFixedToAttrMapsAsync(string groupCompanyCd, string dataKind)
+        /// <summary>
+        /// 固定列から属性へのマッピング定義を取得する。
+        /// groupCompanyCd と projectionKind でフィルタする。
+        /// </summary>
+        public async Task<List<MFixedToAttrMap>> GetFixedToAttrMapsAsync(string groupCompanyCd, string projectionKind)
         {
             using var connection = new NpgsqlConnection(_connectionString);
             return (await connection.QueryAsync<MFixedToAttrMap>(
                 SqlQueries.GetFixedToAttrMaps,
-                new { GroupCompanyCd = groupCompanyCd, DataKind = dataKind })).ToList();
+                new { GroupCompanyCd = groupCompanyCd, ProjectionKind = projectionKind })).ToList();
         }
 
-        /// 属性定義取得
+        /// <summary>
+        /// 属性定義（m_attr_definition）を取得する。
+        /// </summary>
         public async Task<List<MAttrDefinition>> GetAttrDefinitionsAsync()
         {
             using var connection = new NpgsqlConnection(_connectionString);

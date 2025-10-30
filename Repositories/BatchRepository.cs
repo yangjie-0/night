@@ -5,17 +5,25 @@ using ProductDataIngestion.Repositories.Interfaces;
 
 namespace ProductDataIngestion.Repositories
 {
-    // バッチ実行情報のリポジトリ実装
+    /// <summary>
+    /// バッチ実行情報の永続化を担うリポジトリ実装。
+    /// DB の `batch_run` テーブルへの作成・更新・取得処理を提供する。
+    /// </summary>
     public class BatchRepository : IBatchRepository
     {
         private readonly string _connectionString;
 
+        /// <summary>
+        /// コンストラクタ。接続文字列を受け取る。
+        /// </summary>
         public BatchRepository(string connectionString)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
         }
 
-        // バッチ実行情報を作成
+        /// <summary>
+        /// バッチ実行情報を DB に挿入する。
+        /// </summary>
         public async Task CreateBatchRunAsync(BatchRun batchRun)
         {
             using var connection = new NpgsqlConnection(_connectionString);
@@ -50,7 +58,9 @@ namespace ProductDataIngestion.Repositories
             });
         }
 
-        // バッチ実行情報を更新
+        /// <summary>
+        /// 存在するバッチ実行情報を更新する（ステータス/件数等）。
+        /// </summary>
         public async Task UpdateBatchRunAsync(BatchRun batchRun)
         {
             using var connection = new NpgsqlConnection(_connectionString);
@@ -74,7 +84,10 @@ namespace ProductDataIngestion.Repositories
             });
         }
 
-        // バッチIDでバッチ実行情報を取得
+        /// <summary>
+        /// バッチID に対応するバッチ実行情報を取得する。
+        /// 見つからなければ null を返す。
+        /// </summary>
         public async Task<BatchRun?> GetBatchRunByIdAsync(string batchId)
         {
             using var connection = new NpgsqlConnection(_connectionString);

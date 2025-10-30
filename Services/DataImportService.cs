@@ -22,7 +22,7 @@ namespace ProductDataIngestion.Services
         Task<List<MDataImportD>> GetImportDetailsAsync(long profileId);
 
         /// 固定属性マッピング非同期取得
-        Task<List<MFixedToAttrMap>> GetFixedToAttrMapsAsync(string groupCompanyCd, string dataKind);
+        Task<List<MFixedToAttrMap>> GetFixedToAttrMapsAsync(string groupCompanyCd, string projectionKind);
 
         /// 属性定義非同期取得
         Task<List<MAttrDefinition>> GetAttrDefinitionsAsync();
@@ -60,9 +60,9 @@ namespace ProductDataIngestion.Services
         }
 
         /// リポジトリ経由でマッピング取得
-        public async Task<List<MFixedToAttrMap>> GetFixedToAttrMapsAsync(string groupCompanyCd, string dataKind)
+        public async Task<List<MFixedToAttrMap>> GetFixedToAttrMapsAsync(string groupCompanyCd, string projectionKind)
         {
-            return await _repository.GetFixedToAttrMapsAsync(groupCompanyCd, dataKind);
+            return await _repository.GetFixedToAttrMapsAsync(groupCompanyCd, projectionKind);
         }
 
         /// リポジトリ経由で属性定義取得

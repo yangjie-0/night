@@ -4,71 +4,139 @@ using System.Text.Json;
 
 namespace ProductDataIngestion.Models
 {
+    /// <summary>
+    /// バッチ実行のメタ情報を表すモデル。
+    /// バッチID、ファイル情報、件数、状態など実行単位のメタデータを保持する。
+    /// 主にログ記録やステータス表示、デバッグ用に使われる。
+    /// </summary>
     public class BatchRun
     {
+        /// <summary>
+        /// バッチ実行を一意に識別するID。
+        /// </summary>
         [JsonPropertyName("batchId")]
         public string BatchId { get; set; } = string.Empty;
 
-        [JsonPropertyName("filePath")]
-        public string FilePath { get; set; } = string.Empty;
+    /// <summary>
+    /// 処理対象ファイルのパス（ローカルまたはS3のキーなど）。
+    /// </summary>
+    [JsonPropertyName("filePath")]
+    public string FilePath { get; set; } = string.Empty;
 
-        [JsonPropertyName("groupCompanyCd")]
-        public string GroupCompanyCd { get; set; } = string.Empty;
+    /// <summary>
+    /// 所属企業コード（グループ会社コード）。
+    /// </summary>
+    [JsonPropertyName("groupCompanyCd")]
+    public string GroupCompanyCd { get; set; } = string.Empty;
 
-        [JsonPropertyName("targetEntity")]
-        public string TargetEntity { get; set; } = string.Empty;
+    /// <summary>
+    /// 対象エンティティ名（例: PRODUCT, EVENT）。処理区分に使われる。
+    /// </summary>
+    [JsonPropertyName("targetEntity")]
+    public string TargetEntity { get; set; } = string.Empty;
 
-        [JsonPropertyName("totalRecordCount")]
-        public int TotalRecordCount { get; set; }
+    /// <summary>
+    /// 読み込んだレコードの総数。
+    /// </summary>
+    [JsonPropertyName("totalRecordCount")]
+    public int TotalRecordCount { get; set; }
 
-        [JsonPropertyName("successCount")]
-        public int SuccessCount { get; set; }
+    /// <summary>
+    /// 正常に処理されたレコード数。
+    /// </summary>
+    [JsonPropertyName("successCount")]
+    public int SuccessCount { get; set; }
 
-        [JsonPropertyName("errorCount")]
-        public int ErrorCount { get; set; }
+    /// <summary>
+    /// エラーとなったレコード数。
+    /// </summary>
+    [JsonPropertyName("errorCount")]
+    public int ErrorCount { get; set; }
 
-        [JsonPropertyName("skipCount")]
-        public int SkipCount { get; set; }
+    /// <summary>
+    /// スキップされたレコード数（処理対象外等）。
+    /// </summary>
+    [JsonPropertyName("skipCount")]
+    public int SkipCount { get; set; }
 
-        [JsonPropertyName("status")]
-        public string Status { get; set; } = "PROCESSING";
+    /// <summary>
+    /// バッチのステータス（PROCESSING, SUCCESS, FAILED 等）。
+    /// </summary>
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "PROCESSING";
 
-        [JsonPropertyName("startedAt")]
-        public DateTime StartedAt { get; set; } = DateTime.Now;
+    /// <summary>
+    /// バッチ開始日時。
+    /// </summary>
+    [JsonPropertyName("startedAt")]
+    public DateTime StartedAt { get; set; } = DateTime.Now;
 
-        // 添加 EndedAt 属性
-        [JsonPropertyName("endedAt")]
-        public DateTime? EndedAt { get; set; }
+    // EndedAt 属性
+    /// <summary>
+    /// バッチ終了日時（正常終了/異常終了いずれでも設定）。
+    /// </summary>
+    [JsonPropertyName("endedAt")]
+    public DateTime? EndedAt { get; set; }
 
-        [JsonPropertyName("finishedAt")]
-        public DateTime? FinishedAt { get; set; } // 保持向后兼容
+    /// <summary>
+    /// 完了日時（互換性保持用）。
+    /// </summary>
+    [JsonPropertyName("finishedAt")]
+    public DateTime? FinishedAt { get; set; } // 保持向后兼容
 
-        [JsonPropertyName("creAt")]
-        public DateTime CreAt { get; set; } = DateTime.Now;
+    /// <summary>
+    /// レコード作成日時（メタ情報）。
+    /// </summary>
+    [JsonPropertyName("creAt")]
+    public DateTime CreAt { get; set; } = DateTime.Now;
 
-        [JsonPropertyName("updAt")]
-        public DateTime UpdAt { get; set; } = DateTime.Now;
+    /// <summary>
+    /// 最終更新日時（メタ情報）。
+    /// </summary>
+    [JsonPropertyName("updAt")]
+    public DateTime UpdAt { get; set; } = DateTime.Now;
 
-        [JsonIgnore]
-        public string IdemKey { get; set; } = string.Empty;
+    /// <summary>
+    /// 重複検知用のキー（内部利用、シリアライズ除外）。
+    /// </summary>
+    [JsonIgnore]
+    public string IdemKey { get; set; } = string.Empty;
 
-        [JsonIgnore]
-        public string S3Bucket { get; set; } = "local-development-bucket";
+    /// <summary>
+    /// S3 バケット名（ローカル実行時の既定値あり）。
+    /// </summary>
+    [JsonIgnore]
+    public string S3Bucket { get; set; } = "local-development-bucket";
 
-        [JsonIgnore]
-        public string Etag { get; set; } = string.Empty;
+    /// <summary>
+    /// オブジェクトの ETag（S3 等）
+    /// </summary>
+    [JsonIgnore]
+    public string Etag { get; set; } = string.Empty;
 
-        [JsonIgnore]
-        public string DataKind { get; set; } = "PRODUCT";
+    /// <summary>
+    /// データ種別（PRODUCT, EVENT 等）。
+    /// </summary>
+    [JsonIgnore]
+    public string DataKind { get; set; } = "PRODUCT";
 
-        [JsonIgnore]
-        public string FileKey { get; set; } = string.Empty;
+    /// <summary>
+    /// ストレージ上のファイルキー（内部利用、シリアライズ除外）。
+    /// </summary>
+    [JsonIgnore]
+    public string FileKey { get; set; } = string.Empty;
 
-        [JsonIgnore]
-        public string BatchStatus { get; set; } = "RUNNING";
+    /// <summary>
+    /// 内部的なバッチ状態（UI/ログ向け）。
+    /// </summary>
+    [JsonIgnore]
+    public string BatchStatus { get; set; } = "RUNNING";
 
-        [JsonIgnore]
-        public string CountsJson { get; set; } = "{}";
+    /// <summary>
+    /// 件数の集計をJSONで保持するフィールド（内部利用）。
+    /// </summary>
+    [JsonIgnore]
+    public string CountsJson { get; set; } = "{}";
 
         public BatchRun()
         {

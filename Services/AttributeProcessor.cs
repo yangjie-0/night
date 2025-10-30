@@ -4,21 +4,31 @@ using ProductDataIngestion.Models;
 namespace ProductDataIngestion.Services
 {
     /// <summary>
-    /// 属性処理クラス
-    /// extras_jsonからデータを取得してcl_product_attrに挿入する処理を担当
+    /// extras_json からデータを取り出し、
+    /// 商品属性（cl_product_attr）を作るクラスです。
+    /// - processed_columns と source_raw を読みます
+    /// - m_fixed_to_attr_map, m_attr_definitionを使います
     /// </summary>
     public class AttributeProcessor
     {
         private readonly DataImportService _dataService;
 
+        /// <summary>
+        /// コンストラクタです。
+        /// DataImportService を受け取ります。
+        /// </summary>
+        /// <param name="dataService">DB参照用のサービス</param>
         public AttributeProcessor(DataImportService dataService)
         {
             _dataService = dataService;
         }
 
         /// <summary>
-        /// extras_jsonから処理済み列情報を抽出
+        /// extras_json の中の processed_columns を取り出します。
+        /// 戻り値は列名（例: col_1）をキーにした辞書です。
         /// </summary>
+        /// <param name="extrasJson">extras_json の文字列</param>
+        /// <returns>列情報の辞書</returns>
         public Dictionary<string, ProcessedColumnInfo> ExtractProcessedColumns(string extrasJson)
         {
             try
@@ -32,6 +42,7 @@ namespace ProductDataIngestion.Services
                 var processedColumns = new Dictionary<string, ProcessedColumnInfo>();
                 var processedColumnsElement = extrasRoot["processed_columns"];
 
+                // processed_columns は { 列名: 列情報 } の形です
                 foreach (var property in processedColumnsElement.EnumerateObject())
                 {
                     var columnInfo = JsonSerializer.Deserialize<ProcessedColumnInfo>(property.Value.GetRawText());
@@ -47,15 +58,18 @@ namespace ProductDataIngestion.Services
             {
                 throw new IngestException(
                     ErrorCodes.PARSE_FAILED,
-                    $"extras_jsonの解析に失敗しました: {ex.Message}",
+                    $"extras_json の解析に失敗しました: {ex.Message}",
                     ex
                 );
             }
         }
 
         /// <summary>
-        /// extras_jsonからsource_rawを抽出
+        /// extras_json の中から source_raw を取り出します。
+        /// 戻り値は列名->生データ の辞書です。
         /// </summary>
+        /// <param name="extrasJson">extras_json の文字列</param>
+        /// <returns>source_raw の辞書</returns>
         public Dictionary<string, string> ExtractSourceRaw(string extrasJson)
         {
             try
@@ -76,16 +90,23 @@ namespace ProductDataIngestion.Services
             {
                 throw new IngestException(
                     ErrorCodes.PARSE_FAILED,
-                    $"source_rawの解析に失敗しました: {ex.Message}",
+                    $"source_raw の解析に失敗しました: {ex.Message}",
                     ex
                 );
             }
         }
 
         /// <summary>
-        /// 属性処理: PRODUCT と PRODUCT_EAV の両方に対応
-        /// extras_jsonから直接データを取得して処理
+        /// 属性を作るメインの処理です。
+        /// - processed_columns を読みます
+        /// - 必要な列だけを選びます
+        /// - マスタにより source_id や source_label を作ります
         /// </summary>
+        /// <param name="batchId">バッチID</param>
+        /// <param name="tempProduct">一時データの行</param>
+        /// <param name="groupCompanyCd">グループ会社コード</param>
+        /// <param name="dataKind">データ種別</param>
+        /// <returns>作った ClProductAttr のリスト</returns>
         public async Task<List<ClProductAttr>> ProcessAttributesAsync(
             string batchId,
             TempProductParsed tempProduct,
@@ -96,14 +117,13 @@ namespace ProductDataIngestion.Services
 
             try
             {
-                // extras_jsonから処理済み列情報を抽出
-                Console.WriteLine($"\n=== extras_json解析開始 (temp_row_id={tempProduct.TempRowId}) ===");
+                // extras_json から processed_columns と source_raw を取り出す
+                Console.WriteLine($"\n=== extras_json 解析開始 (temp_row_id={tempProduct.TempRowId}) ===");
                 var processedColumns = ExtractProcessedColumns(tempProduct.ExtrasJson);
                 var sourceRaw = ExtractSourceRaw(tempProduct.ExtrasJson);
 
-                Console.WriteLine($"✓ extras_jsonから抽出: processed_columns={processedColumns.Count}件, source_raw={sourceRaw.Count}件");
-
-                // processed_columnsの内容を出力
+                // 最初の数件だけ確認用に表示
+                Console.WriteLine($"✓ extras_json から抽出: processed_columns={processedColumns.Count}件, source_raw={sourceRaw.Count}件");
                 foreach (var kvp in processedColumns.Take(5))
                 {
                     Console.WriteLine($"  [{kvp.Key}] header={kvp.Value.Header}, attr_cd={kvp.Value.AttrCd}, " +
@@ -115,12 +135,11 @@ namespace ProductDataIngestion.Services
                     Console.WriteLine($"  ... 他 {processedColumns.Count - 5} 件");
                 }
 
-                // マスタデータの取得
+                // 
                 var attrMaps = await _dataService.GetFixedToAttrMapsAsync(groupCompanyCd, dataKind);
                 var attrDefinitions = await _dataService.GetAttrDefinitionsAsync();
 
-                // is_required == trueの列のみを処理
-                // PRODUCTとPRODUCT_EAVの両方を処理
+                // 3) 必要な列だけ選ぶ（is_required=true && PRODUCT 系）
                 var requiredColumns = processedColumns
                     .Where(kvp => kvp.Value.IsRequired &&
                                  (kvp.Value.ProjectionKind == "PRODUCT" || kvp.Value.ProjectionKind == "PRODUCT_EAV"))
@@ -129,6 +148,7 @@ namespace ProductDataIngestion.Services
 
                 Console.WriteLine($"\n✓ フィルタ後の処理対象列数: {requiredColumns.Count} (PRODUCT + PRODUCT_EAV)");
 
+                // 4) 各列を処理
                 foreach (var columnKvp in requiredColumns)
                 {
                     var columnInfo = columnKvp.Value;
@@ -136,9 +156,8 @@ namespace ProductDataIngestion.Services
                     Console.WriteLine($"\n--- 処理中: {columnKvp.Key} ---");
                     Console.WriteLine($"  attr_cd={columnInfo.AttrCd}, header={columnInfo.Header}");
                     Console.WriteLine($"  transformed_value='{columnInfo.TransformedValue}'");
-                    Console.WriteLine($"  projection_kind={columnInfo.ProjectionKind}, is_required={columnInfo.IsRequired}");
 
-                    // attr_cdが空の場合はエラー (is_required=trueの列には必須)
+                    // attr_cd がないとエラー（必須列なので）
                     if (string.IsNullOrEmpty(columnInfo.AttrCd))
                     {
                         throw new IngestException(
@@ -148,7 +167,7 @@ namespace ProductDataIngestion.Services
                         );
                     }
 
-                    // 変換後の値が空の場合はスキップ
+                    // 変換後の値が空ならスキップ
                     if (string.IsNullOrWhiteSpace(columnInfo.TransformedValue))
                     {
                         Console.WriteLine($"  → [スキップ] 変換後の値が空");
@@ -162,8 +181,8 @@ namespace ProductDataIngestion.Services
 
                     if (attrMap != null)
                     {
-                        Console.WriteLine($"  → ケース1: m_fixed_to_attr_mapに存在 (value_role={attrMap.ValueRole})");
-                        // ケース1: m_fixed_to_attr_mapに存在する場合
+                        // マップルールがあればそちらを使う
+                        Console.WriteLine($"  → ケース1: m_fixed_to_attr_map にルールあり (value_role={attrMap.ValueRole})");
                         productAttr = ProcessWithFixedMap(
                             batchId,
                             tempProduct,
@@ -176,8 +195,8 @@ namespace ProductDataIngestion.Services
                     }
                     else
                     {
-                        Console.WriteLine($"  → ケース2: m_fixed_to_attr_mapに存在しない");
-                        // ケース2: m_fixed_to_attr_mapに存在しない場合
+                        // 無ければ単純に transformed_value を使う
+                        Console.WriteLine($"  → ケース2: m_fixed_to_attr_map にルールなし");
                         productAttr = ProcessWithoutFixedMap(
                             batchId,
                             tempProduct,
@@ -194,11 +213,11 @@ namespace ProductDataIngestion.Services
                     }
                     else
                     {
-                        Console.WriteLine($"  → [スキップ] 属性がnull");
+                        Console.WriteLine($"  → [スキップ] 属性が null");
                     }
                 }
 
-                Console.WriteLine($"属性処理完了: {productAttrs.Count}件");
+                Console.WriteLine($"属性処理完了: {productAttrs.Count} 件");
                 return productAttrs;
             }
             catch (Exception ex) when (ex is not IngestException)
@@ -213,8 +232,8 @@ namespace ProductDataIngestion.Services
         }
 
         /// <summary>
-        /// m_fixed_to_attr_mapを使用した属性処理
-        /// value_role: ID_AND_LABEL, ID_ONLY, LABEL_ONLY に対応
+        /// m_fixed_to_attr_map のルールに従って source_id と source_label を作ります。
+        /// value_role によって挙動が変わります。
         /// </summary>
         private ClProductAttr? ProcessWithFixedMap(
             string batchId,
@@ -228,7 +247,7 @@ namespace ProductDataIngestion.Services
             string? sourceIdValue = null;
             string? sourceLabelValue = null;
 
-            // value_roleに基づいて値を取得
+            // value_role によって取り方を変える
             if (attrMap.ValueRole == "ID_AND_LABEL")
             {
                 // IDとLabelの両方を取得
@@ -269,8 +288,7 @@ namespace ProductDataIngestion.Services
             // data_typeを取得
             string? dataType = attrDefinitions.FirstOrDefault(ad => ad.AttrCd == columnInfo.AttrCd)?.DataType;
 
-            // attr_seqを計算 (同じattr_cdの出現回数 + 1)
-            short attrSeq = 1;
+            short attrSeq = 1; // 簡易実装: 出現回数計算は別で実装可能
 
             var productAttr = new ClProductAttr
             {
@@ -290,7 +308,8 @@ namespace ProductDataIngestion.Services
         }
 
         /// <summary>
-        /// m_fixed_to_attr_mapを使用しない属性処理
+        /// m_fixed_to_attr_map に対応しない通常の属性処理。
+        /// columnInfo.TransformedValue を source_id として扱い、ClProductAttr を生成する。
         /// </summary>
         private ClProductAttr? ProcessWithoutFixedMap(
             string batchId,
@@ -339,22 +358,26 @@ namespace ProductDataIngestion.Services
             return productAttr;
         }
 
-        /// <summary>
-        /// source_columnからprocessed_columnsを検索して値を取得
-        /// 例: source_brand_id → col_6の transformed_value を取得
-        /// </summary>
-        private string? FindValueBySourceColumn(string? sourceColumn, Dictionary<string, ProcessedColumnInfo> processedColumns)
+    /// <summary>
+    /// source_column 名（例: source_brand_id）から対応する processed_columns の transformed_value を探して返す。
+    /// 内部的には "source_" プレフィックスを取り除いた target_column を比較して検索する。
+    /// 見つからない場合は null を返す。
+    /// </summary>
+    /// <param name="sourceColumn">source_ で始まる列名</param>
+    /// <param name="processedColumns">processed_columns の辞書</param>
+    /// <returns>見つかった transformed_value または null</returns>
+    private string? FindValueBySourceColumn(string? sourceColumn, Dictionary<string, ProcessedColumnInfo> processedColumns)
         {
             if (string.IsNullOrEmpty(sourceColumn))
             {
-                Console.WriteLine($"    [FindValue] sourceColumnが空");
+                Console.WriteLine($"    [FindValue] sourceColumn が空");
                 return null;
             }
 
             // target_columnがsourceColumnと一致する列を探す
             // 例: source_brand_id → brand_id
             string targetColumn = sourceColumn.Replace("source_", "");
-            Console.WriteLine($"    [FindValue] sourceColumn={sourceColumn} → targetColumn={targetColumn}");
+            Console.WriteLine($"    [FindValue] sourceColumn={sourceColumn} -> targetColumn={targetColumn}");
 
             foreach (var kvp in processedColumns.Values)
             {
@@ -365,47 +388,9 @@ namespace ProductDataIngestion.Services
                 }
             }
 
-            Console.WriteLine($"    [FindValue] × 見つからない: targetColumn={targetColumn}");
+            Console.WriteLine($"    [FindValue] 見つからない: targetColumn={targetColumn}");
             return null;
         }
     }
 
-    /// <summary>
-    /// processed_columns内の列情報を表すクラス
-    /// </summary>
-    public class ProcessedColumnInfo
-    {
-        [System.Text.Json.Serialization.JsonPropertyName("csv_column_index")]
-        public int CsvColumnIndex { get; set; }
-
-        [System.Text.Json.Serialization.JsonPropertyName("header")]
-        public string Header { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("raw_value")]
-        public string RawValue { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("transformed_value")]
-        public string TransformedValue { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("target_column")]
-        public string TargetColumn { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("projection_kind")]
-        public string ProjectionKind { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("attr_cd")]
-        public string AttrCd { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("transform_expr")]
-        public string TransformExpr { get; set; } = string.Empty;
-
-        [System.Text.Json.Serialization.JsonPropertyName("is_required")]
-        public bool IsRequired { get; set; }
-
-        [System.Text.Json.Serialization.JsonPropertyName("is_injected")]
-        public bool IsInjected { get; set; }
-
-        [System.Text.Json.Serialization.JsonPropertyName("mapping_success")]
-        public bool? MappingSuccess { get; set; }
-    }
 }

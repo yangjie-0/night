@@ -57,7 +57,7 @@ COMMENT ON COLUMN m_data_import_setting.upd_at IS '更新日時';
 CREATE TABLE m_fixed_to_attr_map (
     map_id BIGINT NOT NULL,
     group_company_cd TEXT NOT NULL,
-    data_kind TEXT NOT NULL,
+    projection_kind TEXT NOT NULL,
     attr_cd TEXT NOT NULL,
     source_id_column TEXT,
     source_label_column TEXT,
@@ -75,12 +75,12 @@ CREATE TABLE m_fixed_to_attr_map (
 COMMENT ON TABLE m_fixed_to_attr_map IS '属性ルール投影マスタ';
 COMMENT ON COLUMN m_fixed_to_attr_map.map_id IS 'マップID';
 COMMENT ON COLUMN m_fixed_to_attr_map.group_company_cd IS 'GP会社コード';
-COMMENT ON COLUMN m_fixed_to_attr_map.data_kind IS 'データ種別: PRODUCT:商品、PRODUCT_MNG:製品、EVENT:在庫、販売';
+COMMENT ON COLUMN m_fixed_to_attr_map.projection_kind IS 'データ種別: PRODUCT:商品、PRODUCT_MNG:製品、EVENT:在庫、販売';
 COMMENT ON COLUMN m_fixed_to_attr_map.attr_cd IS '項目コード';
 COMMENT ON COLUMN m_fixed_to_attr_map.source_id_column IS 'TEMPID列名';
 COMMENT ON COLUMN m_fixed_to_attr_map.source_label_column IS 'TEMP名称列名';
 COMMENT ON COLUMN m_fixed_to_attr_map.value_role IS '値の役割: ID_ONLY:IDのみ、LABEL_ONLY:ラベルのみ、ID_AND_LABEL:IDラベル両方';
-COMMENT ON COLUMN m_fixed_to_attr_map.data_type_override IS 'データタイプ上書き: TEXT:テキスト、NUM:数値、DATE:日付、LIST:リスト、BOOL:真偽、REF:外部参照';
+COMMENT ON COLUMN m_fixed_to_attr_map.data_type_override IS 'データタイプ上書き: TEXT:テキスト、NUM:数値、TIMESTAMPTZ:日付、LIST:リスト、BOOL:真偽、REF:外部参照';
 COMMENT ON COLUMN m_fixed_to_attr_map.split_mode IS '区切り文字';
 COMMENT ON COLUMN m_fixed_to_attr_map.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_fixed_to_attr_map.priority IS '優先度';
@@ -110,7 +110,7 @@ COMMENT ON COLUMN m_data_import_d.column_seq IS '列番号: CSV上の列イン�
 COMMENT ON COLUMN m_data_import_d.projection_kind IS 'ターゲット: PRODUCT:商品、EVENT:イベント、PRODUCT_EAV:商品EAV　ルールの行ごとの上書き';
 COMMENT ON COLUMN m_data_import_d.attr_cd IS '項目コード';
 COMMENT ON COLUMN m_data_import_d.target_column IS '固定カラム: 直差し先を明示したい場合（固定カラム）';
-COMMENT ON COLUMN m_data_import_d.cast_type IS '型変換タイプ: TEXT:テキスト、NUM:数値、DATE:日付、BOOL:真偽';
+COMMENT ON COLUMN m_data_import_d.cast_type IS '型変換タイプ: TEXT:テキスト、NUM:数値、TIMESTAMPTZ:日付、BOOL:真偽';
 COMMENT ON COLUMN m_data_import_d.transform_expr IS '値変換式: 例: trim(@), upper(@), to_timestamp(@,''YYYY-MM-DD'')';
 COMMENT ON COLUMN m_data_import_d.is_required IS '必須フラグ';
 COMMENT ON COLUMN m_data_import_d.import_remarks IS '備考';
@@ -255,7 +255,7 @@ CREATE TABLE cl_product_attr (
     source_raw TEXT,
     value_text TEXT,
     value_num NUMERIC(18,4),
-    value_date DATE,
+    value_date TIMESTAMPTZ,
     value_cd TEXT,
     g_list_item_id BIGINT,
     data_type TEXT,
@@ -281,7 +281,7 @@ COMMENT ON COLUMN cl_product_attr.value_num IS '正規化数値: 数値項目用
 COMMENT ON COLUMN cl_product_attr.value_date IS '正規化日付: 日付項目用';
 COMMENT ON COLUMN cl_product_attr.value_cd IS '正規化コード値: 正規化後のコード（g_list_item.g_item_cdなど）';
 COMMENT ON COLUMN cl_product_attr.g_list_item_id IS 'GアイテムリストID';
-COMMENT ON COLUMN cl_product_attr.data_type IS 'データタイプ: TEXT:テキスト、NUM:数値、DATE:日付、LIST:リスト、BOOL:真偽、REF:外部参照';
+COMMENT ON COLUMN cl_product_attr.data_type IS 'データタイプ: TEXT:テキスト、NUM:数値、TIMESTAMPTZ:日付、LIST:リスト、BOOL:真偽、REF:外部参照';
 COMMENT ON COLUMN cl_product_attr.quality_flag IS '品質判定フラグ: OK:OK、REVIEW:確認、INVALID:無効';
 COMMENT ON COLUMN cl_product_attr.quality_detail_json IS '品質詳細情報: 詳細な判定結果（例：{"id_label_mismatch":true,"synonym_hit":false}）';
 COMMENT ON COLUMN cl_product_attr.provenance_json IS '出処情報(ルール適用履歴): どのルール/マッピングを使ったか（例：{"rule":"brand_source_map","match_type":"label"}）';

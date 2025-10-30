@@ -1,44 +1,41 @@
 namespace ProductDataIngestion.Models
 {
     /// <summary>
-    /// エラー詳細情報モデル
-    /// エラー発生時の詳細情報を構造化して保持
+    /// 発生したエラーの詳細を表すモデル。
+    /// エラーコード、メッセージ、参照レコードや生データ断片などを保持する。
+    /// デバッグやログ、エラー報告に利用する。
     /// </summary>
     public class ErrorDetail
     {
-        /// <summary>
-        /// エラーコード (ErrorCodesクラスの定数を使用)
-        /// 例: "PARSE_FAILED", "MISSING_COLUMN"
-        /// </summary>
-        public string ErrorCode { get; set; } = string.Empty;
+    /// <summary>
+    /// エラーコード（`ErrorCodes` 定義の定数を使用）。例: "PARSE_FAILED"。
+    /// </summary>
+    public string ErrorCode { get; set; } = string.Empty;
 
-        /// <summary>
-        /// エラーメッセージ
-        /// </summary>
-        public string Message { get; set; } = string.Empty;
+    /// <summary>
+    /// 人間向けのエラーメッセージ。
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
 
-        /// <summary>
-        /// レコード参照 (行番号、ID、ファイルパスなど)
-        /// 例: "Row 123", "ProductId: ABC-001"
-        /// </summary>
-        public string? RecordRef { get; set; }
+    /// <summary>
+    /// エラーが発生したレコードの参照情報（行番号やID、識別子）。
+    /// </summary>
+    public string? RecordRef { get; set; }
 
-        /// <summary>
-        /// エラー発生時の生データ断片
-        /// デバッグやトラブルシューティング用
-        /// </summary>
-        public string? RawFragment { get; set; }
+    /// <summary>
+    /// 生データの断片（エラー発生箇所の抜粋）。デバッグに使用。
+    /// </summary>
+    public string? RawFragment { get; set; }
 
-        /// <summary>
-        /// エラー発生時刻 (オプション)
-        /// </summary>
-        public DateTime? Timestamp { get; set; }
+    /// <summary>
+    /// エラー発生のタイムスタンプ（UTC）。オプション。
+    /// </summary>
+    public DateTime? Timestamp { get; set; }
 
-        /// <summary>
-        /// 追加コンテキスト情報 (オプション)
-        /// 例: ファイル名、処理ステップなど
-        /// </summary>
-        public Dictionary<string, string>? Context { get; set; }
+    /// <summary>
+    /// 追加のコンテキスト情報（キー/値）。ファイル名や処理ステップなど補助情報を格納する。
+    /// </summary>
+    public Dictionary<string, string>? Context { get; set; }
 
         /// <summary>
         /// コンストラクタ
@@ -64,7 +61,7 @@ namespace ProductDataIngestion.Models
         }
 
         /// <summary>
-        /// エラー詳細の文字列表現
+        /// エラー詳細の文字列表現（現時点未使用）
         /// </summary>
         public override string ToString()
         {

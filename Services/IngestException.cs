@@ -17,22 +17,22 @@ namespace ProductDataIngestion.Services
         /// コンストラクタ (ErrorDetail使用)
         /// </summary>
         /// <param name="errorDetail">エラー詳細情報</param>
-        public IngestException(ErrorDetail errorDetail)
-            : base(errorDetail.Message)
-        {
-            ErrorDetail = errorDetail;
-        }
+        // public IngestException(ErrorDetail errorDetail)
+        //     : base(errorDetail.Message)
+        // {
+        //     ErrorDetail = errorDetail;
+        // }
 
         /// <summary>
         /// コンストラクタ (ErrorDetail + 内部例外)
         /// </summary>
         /// <param name="errorDetail">エラー詳細情報</param>
         /// <param name="innerException">内部例外</param>
-        public IngestException(ErrorDetail errorDetail, Exception innerException)
-            : base(errorDetail.Message, innerException)
-        {
-            ErrorDetail = errorDetail;
-        }
+        // public IngestException(ErrorDetail errorDetail, Exception innerException)
+        //     : base(errorDetail.Message, innerException)
+        // {
+        //     ErrorDetail = errorDetail;
+        // }
 
         /// <summary>
         /// コンストラクタ (簡易版 - 下位互換性のため)
@@ -79,9 +79,9 @@ namespace ProductDataIngestion.Services
         /// <summary>
         /// 例外の文字列表現
         /// </summary>
-        public override string ToString()
-        {
-            return $"{ErrorDetail}\n{base.ToString()}";
-        }
+        // public override string ToString()
+        // {
+        //     return $"{ErrorDetail}\n{base.ToString()}";
+        // }
     }
 }

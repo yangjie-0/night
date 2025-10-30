@@ -1,12 +1,14 @@
 namespace ProductDataIngestion.Models
 {
     /// <summary>
-    /// エラーコード定数クラス
-    /// 設計書に基づくエラー分類コード
+    /// アプリケーション内で使用するエラーコード定数集。
+    /// 設計書に基づくエラー分類コード。
+    /// 各種処理（CSV解析、変換、DB操作等）で利用される識別子を定義する。
     /// </summary>
     public static class ErrorCodes
     {
-        #region CSV解析エラー
+        #region CSV解析
+
 
         /// <summary>
         /// CSV解析失敗

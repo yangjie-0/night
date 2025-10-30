@@ -225,7 +225,7 @@ COMMENT ON COLUMN m_attr_definition.credit_active_flag IS '単位適用フラグ
 COMMENT ON COLUMN m_attr_definition.usage IS '用途: PRODUCT:商品のみ、CATALOG:カタログのみ、NULL:両方';
 COMMENT ON COLUMN m_attr_definition.table_type_cd IS 'テーブル種別コード: MST:マスタ、EAV:EAV項目';
 COMMENT ON COLUMN m_attr_definition.is_golden_product IS 'G商品レコード昇格フラグ: m_product昇格対象';
-COMMENT ON COLUMN m_attr_definition.is_golden_attr IS 'G商品レコードEAV昇格フラグ: m_product_eav保存対象';
+COMMENT ON COLUMN m_attr_definition.is_golden_attr_eav IS 'G商品レコードEAV昇格フラグ: m_product_eav保存対象';
 COMMENT ON COLUMN m_attr_definition.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_attr_definition.attr_remarks IS '備考';
 COMMENT ON COLUMN m_attr_definition.cre_at IS '登録日時';

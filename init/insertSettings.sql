@@ -30,7 +30,7 @@ INSERT INTO m_data_import_setting (
 -- m_fixed_to_attr_map テーブルへのデータ挿入
 INSERT INTO m_fixed_to_attr_map 
 (
-    map_id, group_company_cd, data_kind, attr_cd, 
+    map_id, group_company_cd, projection_kind, attr_cd, 
     source_id_column, source_label_column, 
     value_role, data_type_override, split_mode, 
     is_active, priority, fixed_remarks
@@ -67,7 +67,7 @@ INSERT INTO m_data_import_d (
 (1, 53, 'PRODUCT', 'CATEGORY_2', 'category_2_nm', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 54, 'PRODUCT', 'CATEGORY_3', 'category_3_id', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 55, 'PRODUCT', 'CATEGORY_3', 'category_3_nm', 'TEXT', 'trim(@)', TRUE, NULL),
-(1, 11, 'PRODUCT', 'PRODUCT_STATUS', 'product_status_code', 'TEXT', 'trim(@)', FALSE, '商品状態必須'),
+(1, 11, 'PRODUCT', 'PRODUCT_STATUS', 'product_status_cd', 'TEXT', 'trim(@)', FALSE, '商品状態必須'),
 (1, 12, 'PRODUCT', 'PRODUCT_STATUS', 'product_status_nm', 'TEXT', 'trim(@)', FALSE, '商品状態必須'),
 (1, 13, 'PRODUCT', 'NEW_USED_KBN', 'new_used_kbn', 'TEXT', 'trim(@)', FALSE, '新品区分必須'),
 (1, 14, 'PRODUCT', 'QUANTITY', 'quantity', 'TEXT', 'trim(@)', FALSE, NULL),
@@ -93,7 +93,7 @@ INSERT INTO m_data_import_d (
 (1, 34, 'PRODUCT', 'SALES_PRICE_EXCL_TAX', 'sales_price_excl_tax', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 35, 'PRODUCT', 'SALES_PRICE_INCL_TAX', 'sales_price_incl_tax', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 36, 'PRODUCT', 'SALES_TAX_RATE', 'sales_tax_rate', 'TEXT', 'trim(@)', FALSE, NULL),
-(1, 35, 'PRODUCT', 'PURCHASE_RANK', 'purchase_rank', 'TEXT', 'trim(@)', TRUE, NULL),
+(1, 35, 'PRODUCT', 'PURCHASE_RANK', 'purchase_rank', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 36, 'PRODUCT', 'PURCHASE_RANK', 'purchase_rank_nm', 'TEXT', 'trim(@)', FALSE, NULL),
 (1, 37, 'PRODUCT', 'SALES_RANK', 'sales_rank', 'TEXT', 'trim(@)', TRUE, NULL),
 (1, 38, 'PRODUCT', 'SALES_RANK', 'sales_rank_nm', 'TEXT', 'trim(@)', TRUE, NULL),
@@ -246,10 +246,10 @@ INSERT INTO m_attr_cleanse_policy (
 (41, 1, 'SALES_RANK', 'LIST', 18, 'SALES_RANK', 'KM', NULL, 1, 'ID_EXACT', '{}', NULL, TRUE, 0, NULL, TRUE);
 
 INSERT INTO m_attr_definition (
-    attr_id, attr_cd, attr_nm, attr_sort_no, g_category_cd, data_type,
-    g_list_group_cd, select_type, is_golden_attr, cleanse_phase,
-    required_context_keys, target_table, target_column, product_unit_cd,
-    credit_active_flag, usage, table_type_cd, attr_remarks,
+    attr_id, attr_cd, attr_nm, attr_sort_no, g_category_cd, data_type, 
+    g_list_group_cd, select_type, is_golden_attr, cleanse_phase, 
+    required_context_keys, target_table, target_column, product_unit_cd, 
+    credit_active_flag, usage, table_type_cd, attr_remarks, 
     is_golden_product, is_golden_attr_eav, is_active
 ) VALUES 
 (1, 'GP_CD', 'GP会社コード', 1, NULL, 'REF', NULL, 'SINGLE', TRUE, 10, '{}', 'm_product', 'group_company_id', NULL, FALSE, NULL, 'MST', '最終はm_product.group_company_idへ昇格（CLではPRODUCT_EAV1行作成）', TRUE, TRUE, TRUE),

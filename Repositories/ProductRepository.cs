@@ -5,17 +5,25 @@ using ProductDataIngestion.Repositories.Interfaces;
 
 namespace ProductDataIngestion.Repositories
 {
-    // 商品データのリポジトリ実装
+    /// <summary>
+    /// 商品関連データの永続化を担当するリポジトリ実装。
+    /// temp_product_parsed, cl_product_attr, record_error などへの一括保存処理を提供する。
+    /// </summary>
     public class ProductRepository : IProductRepository
     {
         private readonly string _connectionString;
 
+        /// <summary>
+        /// コンストラクタ：接続文字列を受け取る。
+        /// </summary>
         public ProductRepository(string connectionString)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
         }
 
-        // 一時商品データを一括保存
+        /// <summary>
+        /// 一時商品データをバルク挿入する。リストが空の場合は何もしない。
+        /// </summary>
         public async Task SaveTempProductsAsync(List<TempProductParsed> products)
         {
             if (products.Count == 0) return;
@@ -87,7 +95,9 @@ namespace ProductDataIngestion.Repositories
             await connection.ExecuteAsync(sql, products);
         }
 
-        // 商品属性データを一括保存
+        /// <summary>
+        /// 生成した商品属性（cl_product_attr）をバルク挿入する。リストが空の場合は何もしない。
+        /// </summary>
         public async Task SaveProductAttributesAsync(List<ClProductAttr> attributes)
         {
             if (attributes.Count == 0) return;
@@ -107,7 +117,10 @@ namespace ProductDataIngestion.Repositories
             await connection.ExecuteAsync(sql, attributes);
         }
 
-        // エラーレコードを一括保存
+        /// <summary>
+        /// エラー情報を一括保存する。内部で最初のエラーのみを保存する実装となっている。
+        /// 必要に応じてテーブル構造を変更して複数エラーを保持することを検討してください。
+        /// </summary>
         public async Task SaveRecordErrorsAsync(List<RecordError> errors)
         {
             if (errors.Count == 0) return;
