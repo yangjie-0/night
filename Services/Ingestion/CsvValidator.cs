@@ -32,11 +32,12 @@ namespace ProductDataIngestion.Services
                 // CSV範囲外チェック: 必須列のみエラーとする
                 if (csvIndex < 0 || csvIndex >= headers.Length)
                 {
-                    if (detail.IsRequired)
-                    {
-                        errors.Add($"必須列{detail.ColumnSeq} ({detail.AttrCd ?? detail.TargetColumn}) がCSV範囲外 (CSV列数: {headers.Length})");
-                        requiredCount++;
-                    }
+                    // 分かりやすいのエラーメッセージ
+                    string attrInfo = !string.IsNullOrEmpty(detail.AttrCd)
+                        ? $"[{detail.AttrCd}]"
+                        : $"[{detail.TargetColumn}]";
+                    errors.Add($"必須列が見つかりません: {detail.ColumnSeq}列目 {attrInfo}。CSVファイルには{headers.Length}列しかありません。");
+                    requiredCount++;
                 }
             }
 
@@ -46,7 +47,7 @@ namespace ProductDataIngestion.Services
             {
                 throw new IngestException(
                     ErrorCodes.MISSING_COLUMN,
-                    $"列マッピングエラー:\n{string.Join("\n", errors)}"
+                    $"不正なCSVファイル：必須列が不足しています。CSV列数: {headers.Length}\n{string.Join("\n", errors)}"
                 );
             }
         }

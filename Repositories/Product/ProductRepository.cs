@@ -96,6 +96,47 @@ namespace ProductDataIngestion.Repositories
         }
 
         /// <summary>
+        /// 一時イベントデータをバルク挿入する。リストが空の場合は何もしない。
+        /// </summary>
+        public async Task SaveTempProductEventsAsync(List<TempProductEvent> events)
+        {
+            if (events.Count == 0) return;
+
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var sql = @"
+                INSERT INTO temp_product_event (
+                    temp_row_event_id, batch_id, time_no, idem_key, source_group_company_cd,
+                    source_product_id,
+                    source_store_id_raw, source_store_nm_raw, source_new_used_kbn_raw,
+                    qty_raw, event_ts_raw, event_kind_raw,
+                    extras_json, step_status
+                ) VALUES (
+                    @TempRowEventId, @BatchId, @TimeNo, (@BatchId || ':' || @TimeNo), @SourceGroupCompanyCd,
+                    @SourceProductId,
+                    @SourceStoreIdRaw, @SourceStoreNmRaw, @SourceNewUsedKbnRaw,
+                    @QtyRaw, @EventTsRaw, @EventKindRaw,
+                    @ExtrasJson::jsonb, @StepStatus
+                ) ON CONFLICT (temp_row_event_id) DO NOTHING";
+
+            await connection.ExecuteAsync(sql, events);
+        }
+
+        /// <summary>
+        /// temp_product_event の冪等性キー（batch_id, time_no）による重複チェック。
+        /// </summary>
+        public async Task<bool> EventIdemKeyExistsAsync(string batchId, long timeNo)
+        {
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var sql = @"SELECT 1 FROM temp_product_event WHERE batch_id = @BatchId AND time_no = @TimeNo LIMIT 1";
+            var exists = await connection.ExecuteScalarAsync<int?>(sql, new { BatchId = batchId, TimeNo = timeNo });
+            return exists.HasValue;
+        }
+
+        /// <summary>
         /// 生成した商品属性（cl_product_attr）をバルク挿入する。リストが空の場合は何もしない。
         /// </summary>
         public async Task SaveProductAttributesAsync(List<ClProductAttr> attributes)
@@ -108,10 +149,12 @@ namespace ProductDataIngestion.Repositories
             var sql = @"
                 INSERT INTO cl_product_attr (
                     batch_id, temp_row_id, attr_cd, attr_seq,
-                    source_id, source_label, source_raw, data_type
+                    source_id, source_label, source_raw, data_type,
+                    quality_status, quality_detail_json, provenance_json
                 ) VALUES (
                     @BatchId, @TempRowId, @AttrCd, @AttrSeq,
-                    @SourceId, @SourceLabel, @SourceRaw, @DataType
+                    @SourceId, @SourceLabel, @SourceRaw, @DataType,
+                    @QualityStatus, @QualityDetailJson::jsonb, @ProvenanceJson::jsonb
                 ) ON CONFLICT (batch_id, temp_row_id, attr_cd, attr_seq) DO NOTHING";
 
             await connection.ExecuteAsync(sql, attributes);
@@ -141,13 +184,7 @@ namespace ProductDataIngestion.Repositories
                 ) VALUES (
                     @BatchId, @Step, @RecordRef, @ErrorCd, @ErrorDetail, @RawFragment,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                ) ON CONFLICT (batch_id) DO UPDATE SET
-                    step = EXCLUDED.step,
-                    record_ref = record_error.record_ref || '; ' || EXCLUDED.record_ref,
-                    error_cd = EXCLUDED.error_cd,
-                    error_detail = record_error.error_detail || E'\n' || EXCLUDED.error_detail,
-                    raw_fragment = EXCLUDED.raw_fragment,
-                    upd_at = CURRENT_TIMESTAMP";
+                )";
 
             await connection.ExecuteAsync(sql, errors);
         }

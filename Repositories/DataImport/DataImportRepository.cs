@@ -24,7 +24,6 @@ namespace ProductDataIngestion.Repositories
                 character_cd as CharacterCd,
                 delimiter as Delimiter,
                 header_row_index as HeaderRowIndex,
-                skip_row_count as SkipRowCount,
                 is_active as IsActive,
                 import_setting_remarks as ImportSettingRemarks,
                 cre_at as CreAt,
@@ -33,6 +32,26 @@ namespace ProductDataIngestion.Repositories
             WHERE group_company_cd = @GroupCompanyCd 
                 AND usage_nm = @UsageNm 
                 AND is_active = true";
+
+        /// アクティブなインポート設定を group_company_cd / target_entity で取得
+        public const string GetActiveImportSettingsByEntity = @"
+            SELECT 
+                profile_id as ProfileId,
+                usage_nm as UsageNm,
+                group_company_cd as GroupCompanyCd,
+                target_entity as TargetEntity,
+                character_cd as CharacterCd,
+                delimiter as Delimiter,
+                header_row_index as HeaderRowIndex,
+                is_active as IsActive,
+                import_setting_remarks as ImportSettingRemarks,
+                cre_at as CreAt,
+                upd_at as UpdAt
+            FROM m_data_import_setting 
+            WHERE group_company_cd = @GroupCompanyCd 
+                AND target_entity = @TargetEntity 
+                AND is_active = true
+            ORDER BY profile_id";
 
         /// インポート明細取得SQL
         public const string GetImportDetails = @"
@@ -68,7 +87,7 @@ namespace ProductDataIngestion.Repositories
             WHERE group_company_cd = @GroupCompanyCd
                 AND projection_kind = @ProjectionKind
                 AND is_active = true
-            ORDER BY priority";
+            ORDER BY priority ASC, map_id ASC";
 
         /// 属性定義取得SQL
         public const string GetAttrDefinitions = @"
@@ -138,6 +157,18 @@ namespace ProductDataIngestion.Repositories
             }
 
             return setting;
+        }
+
+        /// <summary>
+        /// 指定の group_company_cd / target_entity に対するアクティブ設定を全件取得する。
+        /// </summary>
+        public async Task<List<MDataImportSetting>> GetActiveImportSettingsAsync(string groupCompanyCd, string targetEntity)
+        {
+            using var connection = new NpgsqlConnection(_connectionString);
+            return (await connection.QueryAsync<MDataImportSetting>(
+                SqlQueries.GetActiveImportSettingsByEntity,
+                new { GroupCompanyCd = groupCompanyCd, TargetEntity = targetEntity }
+            )).ToList();
         }
 
         /// <summary>

@@ -1,8 +1,9 @@
-using CsvHelper;
+﻿using CsvHelper;
 using CsvHelper.Configuration;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Linq;
 using ProductDataIngestion.Models;
 using ProductDataIngestion.Repositories;
 using ProductDataIngestion.Repositories.Interfaces;
@@ -42,7 +43,10 @@ namespace ProductDataIngestion.Services
         // ===== 処理中データの一時保持領域 =====
         private readonly List<BatchRun> _batchRuns = new(); // 現在の実行中または完了したバッチ処理の一覧を保持。
         private readonly List<TempProductParsed> _tempProducts = new(); // CSV解析後の一時商品データ（変換済み）を格納。
+        private readonly List<TempProductEvent> _tempEvents = new(); // CSV解析後の一時イベントデータ（生値中心）を格納。
         private readonly List<RecordError> _recordErrors = new(); // CSV処理中に発生した行単位のエラー情報を格納。
+        // ===== データベーススキーマ情報キャッシュ =====
+        private Dictionary<string, HashSet<string>>? _notNullColumnsCache; // テーブル名 -> NOT NULL列名のセット
 
         // ===== コンストラクタ =====        
         public IngestService(
@@ -84,6 +88,9 @@ namespace ProductDataIngestion.Services
         public async Task<string> ProcessCsvFileAsync(string filePath, string groupCompanyCd, string targetEntity)
         {
             Console.WriteLine($"=== CSV取込開始 ===\nファイル: {filePath}\nGP会社: {groupCompanyCd}\n処理モード: {targetEntity}");
+
+            // データベーススキーマ情報の読込（NOT NULL制約チェック用）
+            await LoadNotNullColumnsAsync();
 
             // 会社コード検証
             await ValidateCompanyCodeAsync(groupCompanyCd); // 指定された会社コードが有効かを検証する
@@ -207,17 +214,27 @@ namespace ProductDataIngestion.Services
         {
             try
             {
-                string usageNm = $"{groupCompanyCd}-{targetEntity}";// 用途キー（例: KM-PRODUCT）
-                var importSetting = await _dataService.GetImportSettingAsync(groupCompanyCd, usageNm);
+                // 指定 group_company_cd / target_entity に対するアクティブ設定を全件取得
+                var candidates = await _dataService.GetActiveImportSettingsAsync(groupCompanyCd, targetEntity);
 
-                // is_active チェック
-                if (importSetting == null || !importSetting.IsActive)
+                if (candidates == null || candidates.Count == 0)
                 {
                     throw new IngestException(
                         ErrorCodes.MAPPING_NOT_FOUND,
-                        $"有効なファイル取込設定が見つかりません: {usageNm}"
+                        $"有効なファイル取込設定が見つかりません: group_company_cd={groupCompanyCd}, target_entity={targetEntity}"
                     );
                 }
+
+                if (candidates.Count > 1)
+                {
+                    var ids = string.Join(",", candidates.Select(c => c.ProfileId));
+                    throw new IngestException(
+                        ErrorCodes.MAPPING_NOT_FOUND,
+                        $"アクティブな取込設定が複数存在します: group_company_cd={groupCompanyCd}, target_entity={targetEntity}, profiles=[{ids}]"
+                    );
+                }
+
+                var importSetting = candidates[0];
 
                 // 列マッピングの全件取得
                 var importDetails = await _dataService.GetImportDetailsAsync(importSetting.ProfileId);
@@ -267,7 +284,7 @@ namespace ProductDataIngestion.Services
             {
                 var config = new CsvConfiguration(CultureInfo.InvariantCulture)
                 {
-                    HasHeaderRecord = true,// CSVの最初の行をヘッダー行として扱う
+                    HasHeaderRecord = (importSetting.HeaderRowIndex > 0),// CSVの最初の行をヘッダー行として扱う
                     Delimiter = importSetting.Delimiter ?? ",", // 区切り文字（指定なければカンマ）
                     BadDataFound = context => { }, // 不正データ（例：改行や区切り不一致）を無視
                     MissingFieldFound = null, // 列不足でも例外を発生させない
@@ -296,7 +313,7 @@ namespace ProductDataIngestion.Services
         /// この関数はCSV取込の中核であり、以下の処理を順に行う：
         ///
         /// 1. ヘッダー行の取得
-        ///    - HeaderRowIndexで指定された行をスキップし、ヘッダー名を確定する。
+        ///    - HeaderRowIndexまで行をスキップし、ヘッダー名を確定する。
         ///    - ヘッダーが空または不正な場合は PARSE_FAILED エラーを返す。
         /// 
         /// 2. データ行の処理  
@@ -323,44 +340,66 @@ namespace ProductDataIngestion.Services
 
             try
             {
+                // ★ 文字コード検証: CSVファイルの実際のエンコーディングと設定が一致するか確認
+                ValidateFileEncoding(filePath, config.Encoding ?? Encoding.UTF8);
+
                 using var reader = new StreamReader(filePath, config.Encoding ?? Encoding.UTF8);
                 using var csv = new CsvReader(reader, config);
 
-                // フロー4: ヘッダー行のスキップと取得
-                for (int i = 1; i < headerRowIndex; i++)
+                // フロー4: ヘッダー行の取得（ヘッダー行より前の無効行をスキップ）
+                // 注意: headerRowIndex=1 の場合、1行目がヘッダーなのでスキップ不要
+                //       headerRowIndex=3 の場合、1行目と2行目をスキップし、3行目をヘッダーとして読む
+                int skippedRows = 0;
+                if (headerRowIndex > 1)
                 {
+                    // ヘッダー行より前の無効行（タイトル行や空行など）をスキップ
+                    for (int i = 1; i < headerRowIndex; i++)
+                    {
+                        if (!await csv.ReadAsync())
+                        {
+                            throw new IngestException(
+                                ErrorCodes.PARSE_FAILED,
+                                $"ヘッダー行 {headerRowIndex} に到達できません（ファイルの行数が不足しています）"
+                            );
+                        }
+                        skippedRows++;
+                    }
+                    Console.WriteLine($"ヘッダー行より前の{skippedRows}行をスキップしました");
+                }
+
+                string[] headers;
+                if (headerRowIndex > 0)
+                {
+                    // ヘッダーありの場合: ヘッダーを読み込み、検証する
                     if (!await csv.ReadAsync())
                     {
                         throw new IngestException(
-                            ErrorCodes.PARSE_FAILED,
-                            $"ヘッダー行 {headerRowIndex} に到達できません"
+                            ErrorCodes.MISSING_COLUMN,
+                            $"ヘッダー行（{headerRowIndex}行目）が読み込めません。ファイルが空か、行数が不足しています。"
                         );
                     }
-                }
 
-                // ヘッダー行を読み込む
-                if (!await csv.ReadAsync())
+                    csv.ReadHeader();
+                    headers = csv.HeaderRecord;
+                    if (headers == null || headers.Length == 0)
+                    {
+                        throw new IngestException(
+                            ErrorCodes.MISSING_COLUMN,
+                            $"ヘッダー行（{headerRowIndex}行目）が空です。必須列の検証ができません。"
+                        );
+                    }
+
+                    Console.WriteLine($"ヘッダー取得完了（{headerRowIndex}行目）: {headers.Length} 列");
+
+                    // 列マッピング検証（設定通りか確認）
+                    _csvValidator.ValidateColumnMappings(importDetails, headers);
+                }
+                else
                 {
-                    throw new IngestException(
-                        ErrorCodes.PARSE_FAILED,
-                        "ヘッダー行が読み込めません"
-                    );
+                    // ヘッダーなしの場合: 検証をスキップし、空のヘッダー配列を設定
+                    headers = Array.Empty<string>();
+                    Console.WriteLine("ヘッダーなし設定のため、ヘッダーの読み込みと列マッピング検証をスキップします。");
                 }
-
-                csv.ReadHeader();//その行を「列名リスト」として認識
-                var headers = csv.HeaderRecord;//ヘッダー行の文字列配列を取得
-                if (headers == null || headers.Length == 0)
-                {
-                    throw new IngestException(
-                        ErrorCodes.PARSE_FAILED,
-                        "ヘッダー行が空です"
-                    );
-                }
-
-                Console.WriteLine($"ヘッダー取得完了: {headers.Length} 列");
-
-                // 列マッピング検証（設定通りか確認）
-                _csvValidator.ValidateColumnMappings(importDetails, headers);
 
                 // データ行の読込開始
                 long dataRowNumber = 0;
@@ -425,10 +464,10 @@ namespace ProductDataIngestion.Services
 
         /// <summary>
         /// CSV行を TempProductParsed に変換し、必要な検証を行う。
-        /// 
+        ///
         /// この関数は1行のCSVデータをマッピング定義（importDetails）に従って
         /// (TempProductParsed) に変換する役割を持つ。
-        /// 
+        ///
         /// 主な処理内容：
         /// - importDetails に従い 各列の値取得（CSV列 or 注入列）
         /// - column_seq=0 は注入値（GP会社コード）として扱う
@@ -436,15 +475,39 @@ namespace ProductDataIngestion.Services
         /// - transform_expr に基づく値変換（trim / upper / nullif など）
         /// - 必須項目チェック（is_required）
         /// - extras_json 作成（生データ＋変換結果＋ルール情報）
-        /// 
+        ///
         /// - CSVの値を変換・検証した後、TempProductParsed に格納
         /// - 欠項目やマッピングエラーは RecordIngestError に登録し処理を継続
+        ///
+        /// ★注意: PRODUCT と EVENT が混在する場合の処理
+        /// - m_data_import_d.projection_kind によって行ごとに分岐
+        /// - PRODUCT / PRODUCT_EAV → temp_product_parsed へ保存（現在の実装）
+        /// - EVENT → temp_product_event へ保存（未実装）
+        /// - 同一ファイル内で projection_kind が混在する場合、行ごとに振り分けが必要
         /// </summary>
         private void MapCsvRowToTempProduct(
                 string batchId, string groupCompanyCd, long dataRowNumber, int currentPhysicalLine,
                 string[] record, string[] headers, List<MDataImportD> importDetails)
         {
             // ▼ このCSV行を表す中間オブジェクト（後でtempテーブルに格納）
+            // 注意: 現在は PRODUCT 専用の TempProductParsed を使用
+            // TODO: EVENT の場合は TempProductEvent モデルを使用する必要がある
+            // EVENTモードかを判定し、必要ならイベント用の中間オブジェクトを準備
+            bool isEventMode = importDetails.Any(d => string.Equals(d.ProjectionKind, "EVENT", StringComparison.OrdinalIgnoreCase));
+            TempProductEvent? tempEvent = null;
+            if (isEventMode)
+            {
+                tempEvent = new TempProductEvent
+                {
+                    TempRowEventId = Guid.NewGuid(),
+                    BatchId = batchId,
+                    TimeNo = dataRowNumber,  // DB列名: time_no
+                    IdemKey = $"{batchId}:{dataRowNumber}",  // 冪等キー生成
+                    SourceGroupCompanyCd = groupCompanyCd,
+                    StepStatus = "READY",
+                    ExtrasJson = "{}"
+                };
+            }
             var tempProduct = new TempProductParsed
             {
                 TempRowId = Guid.NewGuid(),// 行ごとの一意ID（temp用）
@@ -460,7 +523,12 @@ namespace ProductDataIngestion.Services
             var sourceRawDict = new Dictionary<string, string>();// CSVの「生値」をヘッダー名でバックアップ
             var requiredFieldErrors = new List<string>(); // 必須チェックの未充足メッセージを一時保持
 
+            // ▼ EVENT の STORE 列追跡用（同一 attr_cd で複数列がある場合の制御）
+            bool storeIdSet = false;  // STORE の1列目（ID）が既に設定されたか
+            bool storeNmSet = false;  // STORE の2列目（NM）が既に設定されたか
+
             // ▼ 列マッピング定義を column_seq 単位でまとめる
+            // ★projection_kind によって処理順序を制御（PRODUCT → PRODUCT_EAV → EVENT）
             var groupedDetails = importDetails
                 .OrderBy(d => d.ColumnSeq)
                 .ThenBy(d => d.ProjectionKind)  // PRODUCT → PRODUCT_EAV の順で処理
@@ -532,6 +600,42 @@ namespace ProductDataIngestion.Services
                         mappingSuccess = SetTempProductProperty(tempProduct, propertyName, transformedValue);
                     }
 
+                    // ▼ EVENT の固定カラムマッピング（m_data_import_d に基づく）
+                    // *_raw フィールドには元のCSV値（trim前）を保存
+                    if (isEventMode && tempEvent != null && string.Equals(detail.ProjectionKind, "EVENT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var attrCd = (detail.AttrCd ?? string.Empty).ToUpperInvariant();
+                        var targetCol = (detail.TargetColumn ?? string.Empty).ToLowerInvariant();
+                        switch (attrCd)
+                        {
+                            case "PRODUCT_CD":
+                                if (string.IsNullOrWhiteSpace(tempEvent.SourceProductId)) tempEvent.SourceProductId = rawValue;
+                                break;
+                            case "NEW_USED_KBN":
+                                if (string.IsNullOrWhiteSpace(tempEvent.SourceNewUsedKbnRaw)) tempEvent.SourceNewUsedKbnRaw = rawValue;
+                                break;
+                            case "EVENT_TS":
+                                if (string.IsNullOrWhiteSpace(tempEvent.EventTsRaw)) tempEvent.EventTsRaw = rawValue;
+                                break;
+                            case "EVENT_KIND":
+                                if (string.IsNullOrWhiteSpace(tempEvent.EventKindRaw)) tempEvent.EventKindRaw = rawValue;
+                                break;
+                            case "EVENT_QUANTITY":
+                                if (string.IsNullOrWhiteSpace(tempEvent.QtyRaw)) tempEvent.QtyRaw = rawValue;
+                                break;
+                            case "STORE":
+                                // STORE は複数列の場合があるため、列番号順に id / nm を割り振る
+                                // target_column に "store_id" または "store_nm" が含まれるかで判定
+                                if (targetCol.Contains("store_id") && !storeIdSet) { tempEvent.SourceStoreIdRaw = rawValue; storeIdSet = true; }
+                                else if (targetCol.Contains("store_nm") && !storeNmSet) { tempEvent.SourceStoreNmRaw = rawValue; storeNmSet = true; }
+                                else if (!storeIdSet) { tempEvent.SourceStoreIdRaw = rawValue; storeIdSet = true; }
+                                else if (!storeNmSet) { tempEvent.SourceStoreNmRaw = rawValue; storeNmSet = true; }
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+
                     // ▼ extras_json に保存するキーを生成（重複防止のためユニーク化）
                     //    - AttrCd がない場合は subIndex 連番で埋める
                     //    - AttrCd がある場合は "col_{colSeq}_{ATTR_CD}" 形式（":" は "_" に）
@@ -547,7 +651,7 @@ namespace ProductDataIngestion.Services
                         raw_value = rawValue ?? "", // CSVの元の値（または注入値）
                         transformed_value = transformedValue ?? "",// 変換後の値（nullは空文字に）
                         target_column = detail.TargetColumn ?? "",// マッピング先のカラム名（固定カラムの場合）
-                        projection_kind = detail.ProjectionKind,// PRODUCT / PRODUCT_EAV など
+                        projection_kind = detail.ProjectionKind,// PRODUCT / PRODUCT_EAV など（PRODUCT_EAV もここに入る！）
                         attr_cd = detail.AttrCd ?? "", // 項目コード
                         transform_expr = detail.TransformExpr ?? "",// 適用した変換式
                         is_required = detail.IsRequired,// 必須フラグ
@@ -555,11 +659,28 @@ namespace ProductDataIngestion.Services
                         mapping_success = mappingSuccess// 固定カラムに反映できたか
                     };
 
-                    // 必須チェック（true時のみ）
-                    // - 変換後の値が空（null/空白）なら記録
-                    if (detail.IsRequired && string.IsNullOrWhiteSpace(transformedValue))
+                    // 必須チェック: データベースのNOT NULL制約に基づいて検証
+                    // - target_columnが指定されている場合は、そのカラムのNOT NULL制約をチェック
+                    // - 値が空（null/空白）で、かつDBでNOT NULLの場合のみエラー
+                    if (!string.IsNullOrEmpty(detail.TargetColumn) && string.IsNullOrWhiteSpace(transformedValue))
                     {
-                        requiredFieldErrors.Add($"列 {colSeq} ({detail.AttrCd}): 必須項目空");
+                        // projection_kindに応じてテーブルを特定
+                        string tableName = detail.ProjectionKind?.ToUpperInvariant() switch
+                        {
+                            "PRODUCT" => "temp_product_parsed",
+                            "EVENT" => "temp_product_event",
+                            "PRODUCT_EAV" => "cl_product_attr",
+                            _ => "temp_product_parsed"
+                        };
+
+                        // source_プレフィックスを付けた列名をチェック
+                        string columnName = "source_" + detail.TargetColumn.ToLowerInvariant();
+
+                        // データベースでNOT NULL制約がある場合のみエラー
+                        if (IsColumnNotNull(tableName, columnName))
+                        {
+                            requiredFieldErrors.Add($"列 {colSeq} ({detail.AttrCd}): 必須項目空 (DB制約: {tableName}.{columnName} は NOT NULL)");
+                        }
                     }
                 }
             }
@@ -568,19 +689,54 @@ namespace ProductDataIngestion.Services
             //   - まとめて1回例外化して RecordIngestError 側に回す設計（ReadCsvAndSaveToTempAsync で捕捉）
             _csvValidator.ValidateRequiredFields(requiredFieldErrors, dataRowNumber, currentPhysicalLine);
 
-            // ▼ 変換のトレース性を高めるため、extras_json に「生値」「処理詳細」「メタ情報」をまとめる
-            tempProduct.ExtrasJson = JsonSerializer.Serialize(new
+            // ▼ EVENT専用の追加検証: qty_raw は 空/非数値/ゼロ未満 は行エラー
+            if (isEventMode && tempEvent != null)
             {
-                source_raw = sourceRawDict,// CSV由来の生データ（ヘッダー名→値）
-                processed_columns = extrasDict, // 列ごとの処理結果（変換後・マッピング先など）
-                csv_headers = headers,// CSVヘッダーの配列（列順の再現に使える）
-                physical_line = currentPhysicalLine,// ファイル上の物理行番号（デバッグ用）
-                data_row_number = dataRowNumber,// データ行の通し番号（ヘッダー除く）
-                processing_timestamp = DateTime.UtcNow// いつ処理したか（UTC）
+                var qtyRaw = tempEvent.QtyRaw;
+                if (string.IsNullOrWhiteSpace(qtyRaw))
+                {
+                    throw new IngestException(
+                        ErrorCodes.MISSING_COLUMN,
+                        "EVENT_QUANTITY が空です",
+                        recordRef: $"行:{dataRowNumber}");
+                }
+                else if (!decimal.TryParse(qtyRaw, out decimal qtyValue))
+                {
+                    throw new IngestException(
+                        ErrorCodes.PARSE_FAILED,
+                        $"EVENT_QUANTITY が数値ではありません: {qtyRaw}",
+                        recordRef: $"行:{dataRowNumber}");
+                }
+                else if (qtyValue < 0)
+                {
+                    throw new IngestException(
+                        ErrorCodes.PARSE_FAILED,
+                        $"EVENT_QUANTITY がゼロ未満です: {qtyValue}",
+                        recordRef: $"行:{dataRowNumber}");
+                }
+            }
+
+            // ▼ 変換のトレース性を高めるため、extras_json に「生値」「処理詳細」「メタ情報」をまとめる
+            var extrasJson = JsonSerializer.Serialize(new
+            {
+                source_raw = sourceRawDict,
+                processed_columns = extrasDict,
+                csv_headers = headers,
+                physical_line = currentPhysicalLine,
+                data_row_number = dataRowNumber,
+                processing_timestamp = DateTime.UtcNow
             }, new JsonSerializerOptions { WriteIndented = false });
 
-            // ▼ メモリ上の作業バッファに追加（のちに SaveToTempTablesAsync で一括DB保存）
-            _tempProducts.Add(tempProduct);
+            if (isEventMode && tempEvent != null)
+            {
+                tempEvent.ExtrasJson = extrasJson;
+                _tempEvents.Add(tempEvent);
+            }
+            else
+            {
+                tempProduct.ExtrasJson = extrasJson;
+                _tempProducts.Add(tempProduct);
+            }
         }
 
         #endregion
@@ -588,41 +744,42 @@ namespace ProductDataIngestion.Services
         #region フロー7-9: extras_jsonからデータ取得 → 属性生成 → cl_product_attr保存
 
         /// <summary>
-        /// cl_product_attr作成
+        /// フロー7〜9: データ（cl_product_attr / temp_product_event）への変換保存
         /// TempProductParsed の extras_json を元に属性(ClProductAttr)を生成し、DBに保存する
-        /// 
+        ///
         /// 処理の流れ：
         /// 取込済みの TempProductParsed（CSV1行ごとの中間結果）を順番に処理
         /// 各行の extras_json を AttributeProcessor に渡し、EAV形式の属性へ変換
         /// 生成された ClProductAttr（属性レコード）をまとめてDBに保存
+        ///   - targetEntity = "PRODUCT" → cl_product_attr へ保存
         /// </summary>
         private async Task GenerateProductAttributesAsync(
-            string batchId, string groupCompanyCd, string dataKind)
+            string batchId, string groupCompanyCd, string targetEntity)
         {
             try
             {
-                // ▼ 生成された全商品の属性データを一時的に保存するリスト
-                var allProductAttrs = new List<ClProductAttr>();
-                // ▼ TempProductParsed リストに格納された各行（＝CSV1行分の解析結果）を処理
-                foreach (var tempProduct in _tempProducts)
+                if (targetEntity == "PRODUCT")
                 {
-                    // AttributeProcessorを使用して、extras_jsonの内容を解析・属性化
-                    var productAttrs = await _attributeProcessor.ProcessAttributesAsync(
-                        batchId,
-                        tempProduct,
-                        groupCompanyCd,
-                        dataKind
-                    );
-                    // ▼ 生成された属性をリストに追加
-                    allProductAttrs.AddRange(productAttrs);
+                    // ▼ PRODUCT 処理: cl_product_attr テーブルへ保存
+                    await ProcessProductDataAsync(batchId, groupCompanyCd, targetEntity);
                 }
-
-                // ▼ すべての属性をDBに保存（cl_product_attr テーブル）
-                await _productRepository.SaveProductAttributesAsync(allProductAttrs);
-                Console.WriteLine($"cl_product_attr保存完了: {allProductAttrs.Count} レコード");
+                else if (targetEntity == "EVENT")
+                {
+                    // ▼ EVENT 処理: temp_product_event に保存済み（属性生成はスキップ）
+                    await ProcessEventDataAsync(batchId, groupCompanyCd, targetEntity);
+                }
+                else
+                {
+                    throw new IngestException(
+                        ErrorCodes.INVALID_INPUT,
+                        $"サポートされていない targetEntity です: {targetEntity}",
+                        recordRef: $"batch_id:{batchId}"
+                    );
+                }
             }
             catch (IngestException)
             {
+                // 既にIngestExceptionの場合は再スロー
                 throw;
             }
             catch (Exception ex)
@@ -631,9 +788,60 @@ namespace ProductDataIngestion.Services
                 throw new IngestException(
                     ErrorCodes.DB_ERROR,
                     $"属性生成中にエラーが発生しました: {ex.Message}",
-                    ex
+                    ex,
+                    recordRef: $"batch_id:{batchId}"
                 );
             }
+        }
+
+
+        /// <summary>
+        /// PRODUCT データ処理: cl_product_attr テーブルへの保存
+        /// </summary>
+        private async Task ProcessProductDataAsync(string batchId, string groupCompanyCd, string dataKind)
+        {
+            // ▼ 生成された全商品の属性データを一時的に保存するリスト
+            var allProductAttrs = new List<ClProductAttr>();
+
+            // ▼ TempProductParsed リストに格納された各行（＝CSV1行分の解析結果）を処理
+            foreach (var tempProduct in _tempProducts)
+            {
+                // AttributeProcessorを使用して、extras_jsonの内容を解析・属性化
+                var productAttrs = await _attributeProcessor.ProcessAttributesAsync(
+                    batchId,
+                    tempProduct,
+                    groupCompanyCd,
+                    dataKind
+                );
+                // ▼ 生成された属性をリストに追加
+                allProductAttrs.AddRange(productAttrs);
+            }
+
+            // ▼ すべての属性をDBに保存（cl_product_attr テーブル）
+            await _productRepository.SaveProductAttributesAsync(allProductAttrs);
+            Console.WriteLine($"cl_product_attr保存完了: {allProductAttrs.Count} レコード");
+        }
+
+        /// <summary>
+        /// EVENT データ処理: 読込段階で temp_product_event に保存済みのため属性生成はスキップ
+        ///
+        /// TODO: EVENT 処理の実装
+        /// 必須項目:
+        ///   - source_group_company_cd
+        ///   - source_product_cd
+        ///   - event_kind_raw
+        ///   - qty_raw (非数値/ゼロ未満は行エラー)
+        ///   - event_ts_raw
+        ///
+        /// 保存先: temp_product_event テーブル
+        /// キー: temp_row_event_id (UUID採番)
+        /// 冪等性: idem_key (batch_id:line_no) で重複チェック
+        /// </summary>
+        private async Task ProcessEventDataAsync(string batchId, string groupCompanyCd, string dataKind)
+        {
+            // EVENT は読み込み段階で temp_product_event に保存済みのため、ここでは何もしない
+            Console.WriteLine($"EVENT属性生成スキップ: batch_id={batchId}, 件数={_tempEvents.Count}");
+            await Task.CompletedTask;
         }
 
         #endregion
@@ -703,6 +911,20 @@ namespace ProductDataIngestion.Services
         private void RecordIngestError(string batchId, long dataRowNumber, int currentPhysicalLine,
                     IngestException ex, string[]? record)
         {
+            // 将当前 CSV 行拼成原始片段（保留整行，而不是前5个）
+            string rawFragment = ex.RawFragment ?? "";
+                if (string.IsNullOrEmpty(rawFragment))
+                {
+                    if (record != null)
+                    {
+                        // 使用原始 CSV 的分隔符拼回去（保持原始列顺序）
+                        rawFragment = string.Join(",", record);
+                    }
+                    else
+                    {
+                        rawFragment = "";
+                    }
+                }
             var error = new RecordError
             {
                 BatchId = batchId,// どのバッチの処理か
@@ -710,16 +932,13 @@ namespace ProductDataIngestion.Services
                 RecordRef = !string.IsNullOrEmpty(ex.RecordRef) ? ex.RecordRef : $"line:{dataRowNumber}",
                 ErrorCd = ex.ErrorCode,// エラーコード（例: MAPPING_NOT_FOUND）
                 ErrorDetail = $"データ行 {dataRowNumber} (物理行 {currentPhysicalLine}): {ex.Message}",
-                RawFragment = !string.IsNullOrEmpty(ex.RawFragment)
-                    ? ex.RawFragment
-                    : string.Join(",", record?.Take(5) ?? Array.Empty<string>())// 行データの一部を保存
+                RawFragment = rawFragment// 行データの一部を保存
             };
 
             Console.WriteLine($"エラーレコード: [{error.ErrorCd}] {error.ErrorDetail}");
             _recordErrors.Add(error);
         }
 
-        /// <summary>
     /// <summary>
     ///  致命的なIngest例外発生時の処理。
     /// 
@@ -800,12 +1019,22 @@ namespace ProductDataIngestion.Services
         {
             try
             {
-                // ▼ 商品データ（TempProductParsed）をtempテーブルへ保存
-                await _productRepository.SaveTempProductsAsync(_tempProducts);
-                // ▼ 行エラー情報（RecordError）も同時に保存
-                await _productRepository.SaveRecordErrorsAsync(_recordErrors);
-                // ▼ 保存件数をログに出力    
-                Console.WriteLine($"temp保存完了: 商品={_tempProducts.Count}, エラー={_recordErrors.Count}");
+                if (_tempEvents.Count > 0)
+                {
+                    // ▼ EVENTデータは temp_product_event へ保存（商品tempには保存しない）
+                    await _productRepository.SaveTempProductEventsAsync(_tempEvents);
+                    await _productRepository.SaveRecordErrorsAsync(_recordErrors);
+                    Console.WriteLine($"temp保存完了: イベント={_tempEvents.Count}, エラー={_recordErrors.Count}");
+                }
+                else
+                {
+                    // ▼ 商品データ（TempProductParsed）をtempテーブルへ保存
+                    await _productRepository.SaveTempProductsAsync(_tempProducts);
+                    // ▼ 行エラー情報（RecordError）も同時に保存
+                    await _productRepository.SaveRecordErrorsAsync(_recordErrors);
+                    // ▼ 保存件数をログに出力
+                    Console.WriteLine($"temp保存完了: 商品={_tempProducts.Count}, エラー={_recordErrors.Count}");
+                }
             }
             catch (Exception ex)
             {
@@ -1137,6 +1366,139 @@ namespace ProductDataIngestion.Services
         }
 
         /// <summary>
+        /// ファイルの実際の文字コードと設定された文字コードが一致するか検証する
+        ///
+        /// 処理内容:
+        /// 1. ファイルの先頭部分を読み込んで実際のエンコーディングを検出
+        /// 2. 設定されたエンコーディングで読み込んでエラーが発生しないか確認
+        /// 3. 文字化けや読み込みエラーが発生した場合、INVALID_ENCODING エラーを発生
+        ///
+        /// この検証により、CSV読み込み処理中に文字コードの不一致によるエラーを未然に防ぐ。
+        /// エンコーディング不一致はバッチ処理全体を FAILED にして即座に終了する。
+        /// </summary>
+        /// <param name="filePath">検証対象のファイルパス</param>
+        /// <param name="expectedEncoding">設定で指定された文字コード</param>
+        private void ValidateFileEncoding(string filePath, Encoding expectedEncoding)
+        {
+            try
+            {
+                Console.WriteLine($"\n--- 文字コード検証開始 ---");
+                Console.WriteLine($"設定エンコーディング: {expectedEncoding.EncodingName} ({expectedEncoding.WebName})");
+
+                // ファイルの先頭 4KB を読み込んで検証
+                const int sampleSize = 4096;
+                byte[] sampleBytes;
+
+                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    int bytesToRead = (int)Math.Min(sampleSize, fs.Length);
+                    sampleBytes = new byte[bytesToRead];
+                    fs.Read(sampleBytes, 0, bytesToRead);
+                }
+
+                // BOM (Byte Order Mark) チェック
+                string detectedEncodingName = DetectEncodingFromBOM(sampleBytes);
+                if (!string.IsNullOrEmpty(detectedEncodingName))
+                {
+                    Console.WriteLine($"検出されたBOM: {detectedEncodingName}");
+
+                    // BOM が検出された場合、設定と一致するか確認
+                    if (!IsEncodingCompatible(detectedEncodingName, expectedEncoding))
+                    {
+                        throw new IngestException(
+                            ErrorCodes.INVALID_ENCODING,
+                            $"文字コード不一致: ファイルのBOMは {detectedEncodingName} ですが、設定は {expectedEncoding.WebName} です。" +
+                            $"バッチ処理を終了します。",
+                            recordRef: $"file:{filePath}"
+                        );
+                    }
+                }
+
+                // 設定されたエンコーディングで実際に読み込んでみて、エラーが発生しないか確認
+                try
+                {
+                    string testContent = expectedEncoding.GetString(sampleBytes);
+
+                    // 文字化けの可能性をチェック（置換文字 � (U+FFFD) が含まれているか）
+                    if (testContent.Contains('\uFFFD'))
+                    {
+                        throw new IngestException(
+                            ErrorCodes.INVALID_ENCODING,
+                            $"文字コード不一致: {expectedEncoding.WebName} で読み込むと文字化けが発生します。" +
+                            $"ファイルの実際のエンコーディングを確認してください。バッチ処理を終了します。",
+                            recordRef: $"file:{filePath}"
+                        );
+                    }
+
+                    Console.WriteLine($"✓ 文字コード検証成功: {expectedEncoding.WebName}");
+                }
+                catch (DecoderFallbackException dex)
+                {
+                    throw new IngestException(
+                        ErrorCodes.INVALID_ENCODING,
+                        $"文字コード不一致: {expectedEncoding.WebName} でデコードできません。" +
+                        $"ファイルの実際のエンコーディングを確認してください。バッチ処理を終了します。",
+                        dex,
+                        recordRef: $"file:{filePath}"
+                    );
+                }
+            }
+            catch (IngestException)
+            {
+                // IngestException はそのまま再スロー
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new IngestException(
+                    ErrorCodes.INVALID_ENCODING,
+                    $"文字コード検証中にエラーが発生しました: {ex.Message}",
+                    ex,
+                    recordRef: $"file:{filePath}"
+                );
+            }
+        }
+
+        /// <summary>
+        /// BOM (Byte Order Mark) から文字コードを検出する
+        /// </summary>
+        private string DetectEncodingFromBOM(byte[] bytes)
+        {
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+                return "UTF-8";
+            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+                return "UTF-16LE";
+            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+                return "UTF-16BE";
+            if (bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00)
+                return "UTF-32LE";
+            if (bytes.Length >= 4 && bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
+                return "UTF-32BE";
+
+            return string.Empty; // BOM なし
+        }
+
+        /// <summary>
+        /// 検出されたエンコーディング名と設定されたエンコーディングが互換性があるか確認
+        /// </summary>
+        private bool IsEncodingCompatible(string detectedName, Encoding expectedEncoding)
+        {
+            string expectedName = expectedEncoding.WebName.ToUpperInvariant();
+            string detected = detectedName.ToUpperInvariant();
+
+            // UTF-8 の場合
+            if (detected.Contains("UTF-8") || detected.Contains("UTF8"))
+                return expectedName.Contains("UTF-8") || expectedName.Contains("UTF8");
+
+            // UTF-16 の場合
+            if (detected.Contains("UTF-16"))
+                return expectedName.Contains("UTF-16") || expectedName.Contains("UNICODE");
+
+            // その他
+            return detected == expectedName;
+        }
+
+        /// <summary>
         /// 文字コード取得
         /// </summary>
         private Encoding GetEncodingFromCharacterCode(string characterCd)
@@ -1148,6 +1510,67 @@ namespace ProductDataIngestion.Services
                 "EUC-JP" => Encoding.GetEncoding("EUC-JP"),
                 _ => Encoding.UTF8
             };
+        }
+
+        /// <summary>
+        /// データベースのNOT NULL列情報を取得してキャッシュする
+        /// </summary>
+        private async Task LoadNotNullColumnsAsync()
+        {
+            if (_notNullColumnsCache != null)
+                return; // 既にキャッシュ済み
+
+            _notNullColumnsCache = new Dictionary<string, HashSet<string>>();
+
+            using var connection = new NpgsqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            // PostgreSQLのinformation_schemaから列情報を取得
+            var sql = @"
+                SELECT
+                    table_name,
+                    column_name,
+                    is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name IN ('temp_product_parsed', 'temp_product_event', 'cl_product_attr')
+                ORDER BY table_name, ordinal_position";
+
+            var columns = await connection.QueryAsync<(string TableName, string ColumnName, string IsNullable)>(sql);
+
+            foreach (var (tableName, columnName, isNullable) in columns)
+            {
+                if (!_notNullColumnsCache.ContainsKey(tableName))
+                {
+                    _notNullColumnsCache[tableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                // is_nullable = 'NO' の場合、NOT NULL制約がある
+                if (isNullable == "NO")
+                {
+                    _notNullColumnsCache[tableName].Add(columnName);
+                }
+            }
+
+            Console.WriteLine($"データベーススキーマ情報をキャッシュしました:");
+            foreach (var (tableName, notNullCols) in _notNullColumnsCache)
+            {
+                Console.WriteLine($"  {tableName}: {notNullCols.Count}個のNOT NULL列");
+            }
+        }
+
+        /// <summary>
+        /// 指定されたテーブルの列がNOT NULL制約を持つかチェック
+        /// </summary>
+        private bool IsColumnNotNull(string tableName, string columnName)
+        {
+            if (_notNullColumnsCache == null)
+                return false;
+
+            if (!_notNullColumnsCache.TryGetValue(tableName, out var notNullColumns))
+                return false;
+
+            return notNullColumns.Contains(columnName);
         }
 
         #endregion

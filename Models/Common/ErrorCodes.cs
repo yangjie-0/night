@@ -83,6 +83,20 @@ namespace ProductDataIngestion.Models
 
         #endregion
 
+        #region 入力検証エラー
+
+        /// <summary>
+        /// 不正な入力
+        /// </summary>
+        public const string INVALID_INPUT = "INVALID_INPUT";
+
+        /// <summary>
+        /// 未実装機能
+        /// </summary>
+        public const string NOT_IMPLEMENTED = "NOT_IMPLEMENTED";
+
+        #endregion
+
         #region ファイル操作エラー
 
         /// <summary>

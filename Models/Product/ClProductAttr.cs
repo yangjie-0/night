@@ -79,7 +79,7 @@ namespace ProductDataIngestion.Models
         /// <summary>
         /// 品質フラグ（例: "OK", "WARN", "NG"）。デフォルトは "OK"。
         /// </summary>
-        public string QualityFlag { get; set; } = "OK";
+        public string QualityStatus { get; set; } = "OK";
 
         /// <summary>
         /// 品質判定の詳細を格納するJSON文字列（検証結果や理由など）。

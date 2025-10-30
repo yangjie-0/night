@@ -18,7 +18,6 @@ COMMENT ON COLUMN m_company.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_company.cre_at IS '登録日時';
 COMMENT ON COLUMN m_company.upd_at IS '更新日時';
 
--- 全局分类表
 CREATE TABLE m_category_g (
     g_category_id BIGINT PRIMARY KEY,
     g_category_cd TEXT NOT NULL UNIQUE,
@@ -32,7 +31,7 @@ CREATE TABLE m_category_g (
     FOREIGN KEY (g_category_id_parent) REFERENCES m_category_g(g_category_id)
 );
 
-COMMENT ON TABLE m_category_g IS '全局分类表';
+COMMENT ON TABLE m_category_g IS 'Gカテゴリマスタ';
 COMMENT ON COLUMN m_category_g.g_category_id IS 'GカテゴリID';
 COMMENT ON COLUMN m_category_g.g_category_cd IS 'Gカテゴリコード: WATCH,BAG,JEWELRY等、他システム用論理値';
 COMMENT ON COLUMN m_category_g.g_category_id_parent IS '親GカテゴリID';
@@ -43,7 +42,36 @@ COMMENT ON COLUMN m_category_g.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_category_g.cre_at IS '登録日時';
 COMMENT ON COLUMN m_category_g.upd_at IS '更新日時';
 
--- 全局列表组表
+CREATE TABLE category_source_map (
+    map_id BIGINT NOT NULL,
+    group_company_cd TEXT NOT NULL,
+    source_category_1_id TEXT,
+    source_category_1_nm TEXT,
+    source_category_2_id TEXT,
+    source_category_2_nm TEXT,
+    source_category_3_id TEXT,
+    source_category_3_nm TEXT,
+    g_category_id BIGINT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    cre_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    upd_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (map_id, group_company_cd)
+);
+
+COMMENT ON TABLE category_source_map IS 'カテゴリマッピングテーブル';
+COMMENT ON COLUMN category_source_map.map_id IS 'マップID';
+COMMENT ON COLUMN category_source_map.group_company_cd IS 'グループコード';
+COMMENT ON COLUMN category_source_map.source_category_1_id IS '連携元カテゴリID1階層目';
+COMMENT ON COLUMN category_source_map.source_category_1_nm IS '連携元カテゴリ名1階層目';
+COMMENT ON COLUMN category_source_map.source_category_2_id IS '連携元カテゴリID2階層目';
+COMMENT ON COLUMN category_source_map.source_category_2_nm IS '連携元カテゴリ名2階層目';
+COMMENT ON COLUMN category_source_map.source_category_3_id IS '連携元カテゴリID3階層目';
+COMMENT ON COLUMN category_source_map.source_category_3_nm IS '連携元カテゴリ名3階層目';
+COMMENT ON COLUMN category_source_map.g_category_id IS 'GカテゴリID';
+COMMENT ON COLUMN category_source_map.is_active IS '有効フラグ';
+COMMENT ON COLUMN category_source_map.cre_at IS '登録日時';
+COMMENT ON COLUMN category_source_map.upd_at IS '更新日時';
+
 CREATE TABLE m_list_group_g (
     g_list_group_id BIGINT,
     g_list_group_cd TEXT,
@@ -54,7 +82,7 @@ CREATE TABLE m_list_group_g (
     PRIMARY KEY (g_list_group_id)
 );
 
-COMMENT ON TABLE m_list_group_g IS '全局列表组表';
+COMMENT ON TABLE m_list_group_g IS 'Gリストグループマスタ';
 COMMENT ON COLUMN m_list_group_g.g_list_group_id IS 'リストグループID';
 COMMENT ON COLUMN m_list_group_g.g_list_group_cd IS 'リストグループコード: COLOR、MATERIAL';
 COMMENT ON COLUMN m_list_group_g.g_list_group_nm IS 'リストグループ名';
@@ -62,7 +90,6 @@ COMMENT ON COLUMN m_list_group_g.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_list_group_g.cre_at IS '登録日時';
 COMMENT ON COLUMN m_list_group_g.upd_at IS '更新日時';
 
--- 清理规则集主表
 CREATE TABLE m_cleanse_rule_set (
     rule_set_id BIGINT PRIMARY KEY,
     rule_version TEXT NOT NULL,
@@ -74,7 +101,7 @@ CREATE TABLE m_cleanse_rule_set (
     upd_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-COMMENT ON TABLE m_cleanse_rule_set IS '清理规则集主表';
+COMMENT ON TABLE m_cleanse_rule_set IS 'クレンジングルール定義テーブル';
 COMMENT ON COLUMN m_cleanse_rule_set.rule_set_id IS 'ルールセットID';
 COMMENT ON COLUMN m_cleanse_rule_set.rule_version IS 'ルールバージョン（例: ''v2025.10.01''）';
 COMMENT ON COLUMN m_cleanse_rule_set.description IS 'バージョンの説明';
@@ -84,7 +111,6 @@ COMMENT ON COLUMN m_cleanse_rule_set.cre_by IS '作成者';
 COMMENT ON COLUMN m_cleanse_rule_set.cre_at IS '登録日時';
 COMMENT ON COLUMN m_cleanse_rule_set.upd_at IS '更新日時';
 
--- 全局品牌表
 CREATE TABLE m_brand_g (
     g_brand_id BIGINT PRIMARY KEY,
     g_brand_cd TEXT NOT NULL,
@@ -94,7 +120,7 @@ CREATE TABLE m_brand_g (
     upd_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-COMMENT ON TABLE m_brand_g IS '全局品牌表';
+COMMENT ON TABLE m_brand_g IS 'Gブランドマスタ';
 COMMENT ON COLUMN m_brand_g.g_brand_id IS 'GブランドID: 統合情報DB内サロゲートキー';
 COMMENT ON COLUMN m_brand_g.g_brand_cd IS 'Gブランドコード: ROLEX,LV等、他システム用論理値';
 COMMENT ON COLUMN m_brand_g.g_brand_nm IS 'Gブランド名';
@@ -102,7 +128,49 @@ COMMENT ON COLUMN m_brand_g.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_brand_g.cre_at IS '登録日時';
 COMMENT ON COLUMN m_brand_g.upd_at IS '更新日時';
 
--- 店铺表
+CREATE TABLE m_brand_synonym (
+    syn_id BIGINT NOT NULL PRIMARY KEY,
+    g_brand_id BIGINT NOT NULL,
+    canonical_flag BOOLEAN,
+    variant TEXT NOT NULL,
+    variant_normalized TEXT NOT NULL,
+    locale TEXT NOT NULL,
+    yomi_kana TEXT NOT NULL,
+    yomi_hira TEXT NOT NULL,
+    covet_key TEXT NOT NULL,
+    cv_key TEXT NOT NULL,
+    initial_kana TEXT NOT NULL,
+    ggjson_row TEXT NOT NULL,
+    ggjson_col TEXT NOT NULL,
+    romaji TEXT NOT NULL,
+    relation TEXT NOT NULL DEFAULT 'item',
+    weight_hint NUMERIC(4,2) NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    cre_at TIMESTAMPTZ NOT NULL,
+    upd_at TIMESTAMPTZ NOT NULL
+);
+
+COMMENT ON TABLE m_brand_synonym IS 'Gブランドsynonymマスタ';
+COMMENT ON COLUMN m_brand_synonym.syn_id IS 'シノニムID';
+COMMENT ON COLUMN m_brand_synonym.g_brand_id IS 'GブランドID';
+COMMENT ON COLUMN m_brand_synonym.canonical_flag IS '代表フラグ';
+COMMENT ON COLUMN m_brand_synonym.variant IS '表記ゆれ';
+COMMENT ON COLUMN m_brand_synonym.variant_normalized IS '正規化表記';
+COMMENT ON COLUMN m_brand_synonym.locale IS '言語';
+COMMENT ON COLUMN m_brand_synonym.yomi_kana IS 'カタカナ読み';
+COMMENT ON COLUMN m_brand_synonym.yomi_hira IS 'ひらがな読み';
+COMMENT ON COLUMN m_brand_synonym.covet_key IS 'ひらがな読み';
+COMMENT ON COLUMN m_brand_synonym.cv_key IS '索引キー';
+COMMENT ON COLUMN m_brand_synonym.initial_kana IS '頭音モーラ';
+COMMENT ON COLUMN m_brand_synonym.ggjson_row IS '行';
+COMMENT ON COLUMN m_brand_synonym.ggjson_col IS '段';
+COMMENT ON COLUMN m_brand_synonym.romaji IS 'ローマ字';
+COMMENT ON COLUMN m_brand_synonym.relation IS '関係';
+COMMENT ON COLUMN m_brand_synonym.weight_hint IS '重み';
+COMMENT ON COLUMN m_brand_synonym.is_active IS '有効フラグ';
+COMMENT ON COLUMN m_brand_synonym.cre_at IS '登録日時';
+COMMENT ON COLUMN m_brand_synonym.upd_at IS '更新日時';
+
 CREATE TABLE m_store (
     store_id BIGINT,
     group_company_id BIGINT NOT NULL,
@@ -126,7 +194,7 @@ CREATE TABLE m_store (
     FOREIGN KEY (group_company_id) REFERENCES m_company(group_company_id)
 );
 
-COMMENT ON TABLE m_store IS '店铺表';
+COMMENT ON TABLE m_store IS '店舗マスタ';
 COMMENT ON COLUMN m_store.store_id IS '店舗ID';
 COMMENT ON COLUMN m_store.group_company_id IS 'GP会社ID';
 COMMENT ON COLUMN m_store.source_store_id IS '連携元店舗ID';
@@ -146,7 +214,6 @@ COMMENT ON COLUMN m_store.store_remarks IS '備考';
 COMMENT ON COLUMN m_store.cre_at IS '登録日時';
 COMMENT ON COLUMN m_store.upd_at IS '更新日時';
 
--- 全局列表项表
 CREATE TABLE m_list_item_g (
     g_list_item_id BIGINT PRIMARY KEY,
     g_list_group_id BIGINT NOT NULL,
@@ -163,7 +230,7 @@ CREATE TABLE m_list_item_g (
     UNIQUE (g_list_group_id, g_item_cd)
 );
 
-COMMENT ON TABLE m_list_item_g IS '全局列表项表';
+COMMENT ON TABLE m_list_item_g IS 'Gアイテムリストマスタ';
 COMMENT ON COLUMN m_list_item_g.g_list_item_id IS 'GアイテムリストID';
 COMMENT ON COLUMN m_list_item_g.g_list_group_id IS 'リストグループID';
 COMMENT ON COLUMN m_list_item_g.g_item_cd IS 'G項目コード: 一意で判別可能なコード、BL、SS、PG×SS等';
@@ -176,8 +243,6 @@ COMMENT ON COLUMN m_list_item_g.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_list_item_g.cre_at IS '登録日時';
 COMMENT ON COLUMN m_list_item_g.upd_at IS '更新日時';
 
-
--- 属性定义表
 CREATE TABLE m_attr_definition (
     attr_id BIGINT PRIMARY KEY,
     attr_cd TEXT NOT NULL UNIQUE,
@@ -206,7 +271,7 @@ CREATE TABLE m_attr_definition (
     -- FOREIGN KEY (g_list_group_cd) REFERENCES m_list_group_g(g_list_group_cd)
 );
 
-COMMENT ON TABLE m_attr_definition IS '属性定义表';
+COMMENT ON TABLE m_attr_definition IS '項目定義マスタ';
 COMMENT ON COLUMN m_attr_definition.attr_id IS '項目ID';
 COMMENT ON COLUMN m_attr_definition.attr_cd IS '項目コード';
 COMMENT ON COLUMN m_attr_definition.attr_nm IS '項目名称';
@@ -231,7 +296,6 @@ COMMENT ON COLUMN m_attr_definition.attr_remarks IS '備考';
 COMMENT ON COLUMN m_attr_definition.cre_at IS '登録日時';
 COMMENT ON COLUMN m_attr_definition.upd_at IS '更新日時';
 
--- 属性清理策略表
 CREATE TABLE m_attr_cleanse_policy (
     policy_id BIGINT PRIMARY KEY,
     rule_set_id BIGINT NOT NULL,
@@ -258,7 +322,7 @@ CREATE TABLE m_attr_cleanse_policy (
     -- FOREIGN KEY (g_list_group_cd) REFERENCES m_list_group_g(g_list_group_cd)
 );
 
-COMMENT ON TABLE m_attr_cleanse_policy IS '属性清理策略表';
+COMMENT ON TABLE m_attr_cleanse_policy IS 'クレンジングルール定義テーブル';
 COMMENT ON COLUMN m_attr_cleanse_policy.policy_id IS 'ポリシーID: 複数ルールを束ねるポリシーID';
 COMMENT ON COLUMN m_attr_cleanse_policy.rule_set_id IS 'ルールセットID';
 COMMENT ON COLUMN m_attr_cleanse_policy.attr_cd IS '項目コード';
@@ -281,7 +345,6 @@ COMMENT ON COLUMN m_attr_cleanse_policy.upd_by IS '更新者: 監査用';
 COMMENT ON COLUMN m_attr_cleanse_policy.cre_at IS '登録日時';
 COMMENT ON COLUMN m_attr_cleanse_policy.upd_at IS '更新日時';
 
--- 参照表映射表
 CREATE TABLE m_ref_table_map (
     ref_map_id BIGINT PRIMARY KEY,
     attr_cd TEXT NOT NULL,
@@ -302,7 +365,7 @@ CREATE TABLE m_ref_table_map (
     FOREIGN KEY (attr_cd) REFERENCES m_attr_definition(attr_cd)
 );
 
-COMMENT ON TABLE m_ref_table_map IS '参照表映射表';
+COMMENT ON TABLE m_ref_table_map IS '参照マスタ対応マップ';
 COMMENT ON COLUMN m_ref_table_map.ref_map_id IS '参照マップID';
 COMMENT ON COLUMN m_ref_table_map.attr_cd IS '項目コード';
 COMMENT ON COLUMN m_ref_table_map.data_source IS 'データソース区分: MASTER:通常マスタ、DICT:辞書、EXT:外部API';
@@ -320,7 +383,6 @@ COMMENT ON COLUMN m_ref_table_map.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_ref_table_map.cre_at IS '登録日時';
 COMMENT ON COLUMN m_ref_table_map.upd_at IS '更新日時';
 
--- 品牌源映射表
 CREATE TABLE brand_source_map (
     map_id BIGINT PRIMARY KEY,
     group_company_cd TEXT NOT NULL,
@@ -335,7 +397,7 @@ CREATE TABLE brand_source_map (
     FOREIGN KEY (g_brand_id) REFERENCES m_brand_g(g_brand_id)
 );
 
-COMMENT ON TABLE brand_source_map IS '品牌源映射表';
+COMMENT ON TABLE brand_source_map IS 'ブランドマッピングテーブル';
 COMMENT ON COLUMN brand_source_map.map_id IS 'マップID: サロゲート';
 COMMENT ON COLUMN brand_source_map.group_company_cd IS 'GP会社コード: KM,RKE,KBO等、他システム用論理値';
 COMMENT ON COLUMN brand_source_map.source_brand_id IS '連携元ブランドID';
@@ -347,8 +409,6 @@ COMMENT ON COLUMN brand_source_map.source_map_remarks IS '備考';
 COMMENT ON COLUMN brand_source_map.cre_at IS '登録日時';
 COMMENT ON COLUMN brand_source_map.upd_at IS '更新日時';
 
-
--- 属性源映射表
 CREATE TABLE attr_source_map (
     map_id BIGINT PRIMARY KEY,
     group_company_cd TEXT NOT NULL,
@@ -367,7 +427,7 @@ CREATE TABLE attr_source_map (
     FOREIGN KEY (g_list_item_id) REFERENCES m_list_item_g(g_list_item_id)
 );
 
-COMMENT ON TABLE attr_source_map IS '属性源映射表';
+COMMENT ON TABLE attr_source_map IS '項目マッピングテーブル';
 COMMENT ON COLUMN attr_source_map.map_id IS 'マップID: サロゲート';
 COMMENT ON COLUMN attr_source_map.group_company_cd IS 'GP会社コード: KM,RKE,KBO等、他システム用論理値';
 COMMENT ON COLUMN attr_source_map.g_list_group_id IS 'リストグループID';
@@ -382,7 +442,12 @@ COMMENT ON COLUMN attr_source_map.is_active IS '有効フラグ';
 COMMENT ON COLUMN attr_source_map.cre_at IS '登録日時';
 COMMENT ON COLUMN attr_source_map.upd_at IS '更新日時';
 
+-- 外部キー追加
+ALTER TABLE category_source_map 
+ADD CONSTRAINT fk_category_source_map_g_category 
+FOREIGN KEY (g_category_id) REFERENCES m_category_g(g_category_id);
 
-
-
-
+-- 外部キー追加
+ALTER TABLE m_brand_synonym 
+ADD CONSTRAINT fk_brand_synonym_brand 
+FOREIGN KEY (g_brand_id) REFERENCES m_brand_g(g_brand_id);

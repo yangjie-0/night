@@ -1,5 +1,6 @@
 using ProductDataIngestion.Services; // サービス層（業務ロジック）を利用するため
 using ProductDataIngestion.Repositories; // リポジトリ層（DB操作）を利用するため
+using ProductDataIngestion.Models; // エラーコード定数を利用するため
 using Microsoft.Extensions.Configuration;  // 設定ファイル（JSONなど）を読み込むためのライブラリ
 
 /// <summary>
@@ -40,7 +41,7 @@ class Program
             
             // 取込対象の設定（固定値）
             string groupCompanyCd = "KM";// 会社コード（固定）
-            string targetEntity = "PRODUCT";// 対象データ（商品）
+            string targetEntity = "EVENT";// 対象データ（商品）
 
             //// CSVファイルが存在するかをチェック
             if (!File.Exists(csvFilePath))
@@ -105,17 +106,41 @@ class Program
             Console.WriteLine($"\nバッチID: {batchId}");
             Console.WriteLine("\n処理が完了しました。");
         }
+        catch (Npgsql.NpgsqlException ex)
+        {
+            // データベース接続エラーの場合は専用のメッセージを表示
+            Console.WriteLine($"\nデータベース接続エラーが発生しました:");
+            Console.WriteLine($"エラーコード: {ex.ErrorCode}");
+            Console.WriteLine($"メッセージ: {ex.Message}");
+            Console.WriteLine("接続文字列とデータベースの状態を確認してください。");
+            Console.WriteLine($"\nスタックトレース:\n{ex.StackTrace}");
+            
+            // 設計書で定義されたDB_ERRORコードを使用してIngestExceptionでラップする
+            throw new IngestException(
+                ErrorCodes.DB_ERROR, 
+                "データベースに接続できません。設定を確認してください。", 
+                ex,  // innerException
+                $"ErrorCode: {ex.ErrorCode}" // rawFragment
+            );
+        }
         catch (Exception ex)
         {
-            // db接続　throw
-             
-            //想定外のエラーが発生した場合、詳細を出力
+            // その他の予期しないエラーの場合
             Console.WriteLine($"\n予期しないエラーが発生しました:");
             Console.WriteLine($"メッセージ: {ex.Message}");
             Console.WriteLine($"スタックトレース:\n{ex.StackTrace}");
+            
+            // 予期しないエラーの場合もDB_ERRORでラップする（既にIngestExceptionの場合を除く）
+            if (ex is not IngestException)
+            {
+                throw new IngestException(
+                    ErrorCodes.DB_ERROR,
+                    $"予期しないデータベースエラーが発生しました: {ex.Message}",
+                    ex // innerException
+                );
+            }
+            throw;
         }
-
-       //
         Console.WriteLine("\nEnterキーを押して終了してください...");
         Console.ReadLine();
     }

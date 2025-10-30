@@ -42,7 +42,7 @@ public class MDataImportSetting
     /// <summary>
     /// スキップする先頭行数（デフォルト 0）。
     /// </summary>
-    public int SkipRowCount { get; set; } = 0;  
+    
 
     /// <summary>
     /// プロファイルが有効かどうか。

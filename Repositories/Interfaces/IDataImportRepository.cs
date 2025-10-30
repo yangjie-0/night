@@ -14,6 +14,12 @@ namespace ProductDataIngestion.Repositories.Interfaces
         Task<MDataImportSetting> GetImportSettingAsync(string groupCompanyCd, string usageNm);
 
         /// <summary>
+        /// 指定のグループ会社コードと対象エンティティに対して、アクティブなインポート設定を全件取得する。
+        /// 重複チェックや単一選定は上位層で行う。
+        /// </summary>
+        Task<List<MDataImportSetting>> GetActiveImportSettingsAsync(string groupCompanyCd, string targetEntity);
+
+        /// <summary>
         /// プロファイルIDに紐づくインポート明細（カラム定義）を取得する。
         /// </summary>
         Task<List<MDataImportD>> GetImportDetailsAsync(long profileId);

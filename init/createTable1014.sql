@@ -1,5 +1,6 @@
 -- 1. record_error 表（行エラーテーブル）
 CREATE TABLE record_error (
+    error_id UUID NOT NULL DEFAULT gen_random_uuid(),
     batch_id TEXT NOT NULL,
     step TEXT NOT NULL,
     record_ref TEXT,
@@ -8,10 +9,11 @@ CREATE TABLE record_error (
     raw_fragment TEXT,
     cre_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     upd_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (batch_id)
+    PRIMARY KEY (error_id)
 );
 
 COMMENT ON TABLE record_error IS '行エラーテーブル';
+COMMENT ON COLUMN record_error.error_id IS 'エラーID';
 COMMENT ON COLUMN record_error.batch_id IS 'バッチID';
 COMMENT ON COLUMN record_error.step IS '処理ステップ: INGEST:取込、CLEANSE:クレンジング、UPSERT:アップサート';
 COMMENT ON COLUMN record_error.record_ref IS 'レコード参照キー: TEMP行IDやファイル行内番号"line:123""temp_row_id=3456"';
@@ -30,7 +32,6 @@ CREATE TABLE m_data_import_setting (
     character_cd TEXT DEFAULT 'UTF-8',
     delimiter TEXT DEFAULT ',',
     header_row_index INT DEFAULT 1,
-    skip_row_count INT DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     import_setting_remarks TEXT,
     cre_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -47,7 +48,6 @@ COMMENT ON COLUMN m_data_import_setting.target_entity IS '処理モード: PRODU
 COMMENT ON COLUMN m_data_import_setting.character_cd IS '文字コード';
 COMMENT ON COLUMN m_data_import_setting.delimiter IS '区切り文字';
 COMMENT ON COLUMN m_data_import_setting.header_row_index IS 'ヘッダ行番号';
-COMMENT ON COLUMN m_data_import_setting.skip_row_count IS 'スキップ行数';
 COMMENT ON COLUMN m_data_import_setting.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_data_import_setting.import_setting_remarks IS '備考';
 COMMENT ON COLUMN m_data_import_setting.cre_at IS '登録日時';
@@ -259,7 +259,7 @@ CREATE TABLE cl_product_attr (
     value_cd TEXT,
     g_list_item_id BIGINT,
     data_type TEXT,
-    quality_flag TEXT,
+    quality_status TEXT,
     quality_detail_json JSONB,
     provenance_json JSONB,
     rule_version TEXT,
@@ -282,7 +282,7 @@ COMMENT ON COLUMN cl_product_attr.value_date IS '正規化日付: 日付項目�
 COMMENT ON COLUMN cl_product_attr.value_cd IS '正規化コード値: 正規化後のコード（g_list_item.g_item_cdなど）';
 COMMENT ON COLUMN cl_product_attr.g_list_item_id IS 'GアイテムリストID';
 COMMENT ON COLUMN cl_product_attr.data_type IS 'データタイプ: TEXT:テキスト、NUM:数値、TIMESTAMPTZ:日付、LIST:リスト、BOOL:真偽、REF:外部参照';
-COMMENT ON COLUMN cl_product_attr.quality_flag IS '品質判定フラグ: OK:OK、REVIEW:確認、INVALID:無効';
+COMMENT ON COLUMN cl_product_attr.quality_status IS '品質判定フラグ: OK:OK、REVIEW:確認、INVALID:無効';
 COMMENT ON COLUMN cl_product_attr.quality_detail_json IS '品質詳細情報: 詳細な判定結果（例：{"id_label_mismatch":true,"synonym_hit":false}）';
 COMMENT ON COLUMN cl_product_attr.provenance_json IS '出処情報(ルール適用履歴): どのルール/マッピングを使ったか（例：{"rule":"brand_source_map","match_type":"label"}）';
 COMMENT ON COLUMN cl_product_attr.rule_version IS '適用ルールバージョン';
@@ -327,6 +327,3 @@ COMMENT ON COLUMN batch_run.started_at IS '開始日時';
 COMMENT ON COLUMN batch_run.ended_at IS '終了日時';
 COMMENT ON COLUMN batch_run.cre_at IS '登録日時';
 COMMENT ON COLUMN batch_run.upd_at IS '更新日時';
-
-
-

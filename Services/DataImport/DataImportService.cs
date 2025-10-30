@@ -18,6 +18,9 @@ namespace ProductDataIngestion.Services
         /// インポート設定非同期取得
         Task<MDataImportSetting> GetImportSettingAsync(string groupCompanyCd, string usageNm);
 
+        /// アクティブ設定を group_company_cd / target_entity で全件取得
+        Task<List<MDataImportSetting>> GetActiveImportSettingsAsync(string groupCompanyCd, string targetEntity);
+
         /// インポート明細非同期取得
         Task<List<MDataImportD>> GetImportDetailsAsync(long profileId);
 
@@ -53,6 +56,12 @@ namespace ProductDataIngestion.Services
             return await _repository.GetImportSettingAsync(groupCompanyCd, usageNm);
         }
 
+        /// リポジトリ経由でアクティブ設定取得（エンティティ指定）
+        public async Task<List<MDataImportSetting>> GetActiveImportSettingsAsync(string groupCompanyCd, string targetEntity)
+        {
+            return await _repository.GetActiveImportSettingsAsync(groupCompanyCd, targetEntity);
+        }
+
         /// リポジトリ経由で明細取得
         public async Task<List<MDataImportD>> GetImportDetailsAsync(long profileId)
         {
@@ -71,7 +80,7 @@ namespace ProductDataIngestion.Services
             return await _repository.GetAttrDefinitionsAsync();
         }
 
-        /// 型付きCSV読み込み：再利用インスタンスでメモリ効率化
+        /// 型付きCSV読み込み：インスタンスの再利用でメモリ効率を向上
         private T Clone<T>(T source) where T : class, new()
         {
             var target = new T();
