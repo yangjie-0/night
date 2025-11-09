@@ -253,7 +253,7 @@ CREATE TABLE m_attr_definition (
     g_list_group_cd TEXT,
     select_type TEXT,
     is_golden_attr BOOLEAN,
-    cleanse_phase SMALLINT DEFAULT 1,
+    cleanse_phase SMALLINT DEFAULT 999,
     required_context_keys TEXT[] DEFAULT '{}',
     target_table TEXT,
     target_column TEXT,
@@ -262,7 +262,7 @@ CREATE TABLE m_attr_definition (
     usage TEXT,
     table_type_cd TEXT,
     is_golden_product BOOLEAN NOT NULL,
-    is_golden_attr_eav BOOLEAN NOT NULL,
+    is_golden_eav BOOLEAN NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     attr_remarks TEXT,
     cre_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -290,7 +290,7 @@ COMMENT ON COLUMN m_attr_definition.credit_active_flag IS '単位適用フラグ
 COMMENT ON COLUMN m_attr_definition.usage IS '用途: PRODUCT:商品のみ、CATALOG:カタログのみ、NULL:両方';
 COMMENT ON COLUMN m_attr_definition.table_type_cd IS 'テーブル種別コード: MST:マスタ、EAV:EAV項目';
 COMMENT ON COLUMN m_attr_definition.is_golden_product IS 'G商品レコード昇格フラグ: m_product昇格対象';
-COMMENT ON COLUMN m_attr_definition.is_golden_attr_eav IS 'G商品レコードEAV昇格フラグ: m_product_eav保存対象';
+COMMENT ON COLUMN m_attr_definition.is_golden_eav IS 'G商品レコードEAV昇格フラグ: m_product_eav保存対象';
 COMMENT ON COLUMN m_attr_definition.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_attr_definition.attr_remarks IS '備考';
 COMMENT ON COLUMN m_attr_definition.cre_at IS '登録日時';

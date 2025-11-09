@@ -99,7 +99,7 @@ namespace ProductDataIngestion.Models
         /// <summary>
         /// EAV でのゴールデン属性フラグ。
         /// </summary>
-        public bool IsGoldenAttrEav { get; set; }
+        public bool IsGoldenEav { get; set; }
 
         /// <summary>
         /// 属性が有効かどうか。

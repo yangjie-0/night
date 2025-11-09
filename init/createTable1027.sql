@@ -103,8 +103,8 @@ CREATE TABLE m_product (
     last_event_ts TIMESTAMPTZ,
     last_event_kind_cd TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    cre_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    upd_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    cre_at TIMESTAMPTZ NOT NULL,
+    upd_at TIMESTAMPTZ NOT NULL,
     UNIQUE (g_product_cd, unit_no)
 );
 
@@ -129,6 +129,39 @@ COMMENT ON COLUMN m_product.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_product.cre_at IS '登録日時';
 COMMENT ON COLUMN m_product.upd_at IS '更新日時';
 
+CREATE TABLE m_token_route (
+    token_id BIGINT NOT NULL PRIMARY KEY,
+    group_company_cd TEXT NOT NULL,
+    brand_scope BIGINT,
+    category_scope BIGINT,
+    token_label TEXT NOT NULL,
+    token_label_norm TEXT,
+    applicable_attr_cd TEXT,
+    target_attr_cd TEXT,
+    normalize_to TEXT,
+    priority SMALLINT DEFAULT 10,
+    token_remarks TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    cre_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    upd_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE m_token_route IS 'トークン分類辞書マスタ';
+COMMENT ON COLUMN m_token_route.token_id IS 'トークンID';
+COMMENT ON COLUMN m_token_route.group_company_cd IS 'GP会社コード';
+COMMENT ON COLUMN m_token_route.brand_scope IS 'ブランド別トークン';
+COMMENT ON COLUMN m_token_route.category_scope IS 'カテゴリ別トークン';
+COMMENT ON COLUMN m_token_route.token_label IS 'トークン文字列';
+COMMENT ON COLUMN m_token_route.token_label_norm IS 'トークン正規化文字列';
+COMMENT ON COLUMN m_token_route.applicable_attr_cd IS 'トークン辞書適用項目';
+COMMENT ON COLUMN m_token_route.target_attr_cd IS '書き込み先項目';
+COMMENT ON COLUMN m_token_route.normalize_to IS '正規化名';
+COMMENT ON COLUMN m_token_route.priority IS '優先度';
+COMMENT ON COLUMN m_token_route.token_remarks IS '備考';
+COMMENT ON COLUMN m_token_route.is_active IS '有効フラグ';
+COMMENT ON COLUMN m_token_route.cre_at IS '登録日時';
+COMMENT ON COLUMN m_token_route.upd_at IS '更新日時';
+
 ALTER TABLE cl_product_event 
 ADD CONSTRAINT fk_cl_event_temp_event 
 FOREIGN KEY (temp_row_event_id) REFERENCES temp_product_event(temp_row_event_id);
@@ -144,3 +177,15 @@ FOREIGN KEY (g_product_id) REFERENCES m_product(g_product_id);
 ALTER TABLE cl_product_event 
 ADD CONSTRAINT fk_cl_event_store 
 FOREIGN KEY (store_id) REFERENCES m_store(store_id);
+
+ALTER TABLE m_token_route 
+ADD CONSTRAINT fk_token_route_brand 
+FOREIGN KEY (brand_scope) REFERENCES m_brand_g(g_brand_id);
+
+ALTER TABLE m_token_route 
+ADD CONSTRAINT fk_token_route_category 
+FOREIGN KEY (category_scope) REFERENCES m_category_g(g_category_id);
+
+ALTER TABLE m_token_route 
+ADD CONSTRAINT fk_token_route_attr 
+FOREIGN KEY (target_attr_cd) REFERENCES m_attr_definition(attr_cd);

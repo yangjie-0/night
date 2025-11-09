@@ -24,10 +24,10 @@ INSERT INTO m_data_import_setting (
     character_cd, delimiter, header_row_index, is_active,
     cre_at, upd_at
 ) VALUES 
-(1, 'KM-PROCUDT-TEST1', 'KM', 'PRODUCT', 'UTF-8', ',', 1, true, current_timestamp, current_timestamp),
-(2, 'KM-PROCUDT-TEST2', 'RKE', 'PRODUCT', 'SHIFT-JIS', ',', 0, true, current_timestamp, current_timestamp),
-(3, 'KM-PROCUDT-TEST3', 'KM', 'PRODUCT', 'UTF-8', ',', 2, false, current_timestamp, current_timestamp),
-(4, 'KM-TRN', 'KM', 'EVENT','UTF-8', ',', 1, true, current_timestamp, current_timestamp);
+(1, 'KM-PROCUDT-TEST1', 'KM', 'PRODUCT', 'UTF-8', ',', 1, TRUE, current_timestamp, current_timestamp),
+(2, 'KM-PROCUDT-TEST2', 'KM', 'PRODUCT', 'SHIFT-JIS', ',', 0, FALSE, current_timestamp, current_timestamp),
+(3, 'KM-PROCUDT-TEST3', 'KM', 'PRODUCT', 'UTF-8', ',', 2, FALSE, current_timestamp, current_timestamp),
+(4, 'KM-TRN', 'KM', 'EVENT','UTF-8', ',', 1, TRUE, current_timestamp, current_timestamp);
 
 -- -- test data
 -- -- m_fixed_to_attr_map テーブルへのデータ挿入

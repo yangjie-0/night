@@ -1,7 +1,7 @@
 using Npgsql;
 using Dapper;
 using ProductDataIngestion.Models;
-using ProductDataIngestion.Repositories.Interfaces; 
+using ProductDataIngestion.Repositories.Interfaces;
 
 namespace ProductDataIngestion.Repositories
 {
@@ -105,5 +105,67 @@ namespace ProductDataIngestion.Repositories
 
             return await connection.QueryFirstOrDefaultAsync<BatchRun>(sql, new { BatchId = batchId });
         }
+
+        /// <summary>
+        /// クレンジング用、バッチID に対応するバッチ実行情報を取得
+        /// 見つからなければ null を返す。
+        /// </summary>
+        public async Task<BatchRun?> GetByBatchIdAsync(string batchId)
+        {
+            const string sql = @"
+                SELECT
+                    batch_id,
+                    group_company_cd,
+                    batch_status,
+                    counts_json,
+                    started_at,
+                    upd_at
+                FROM batch_run
+                WHERE batch_id = @BatchId
+                LIMIT 1;
+            ";
+
+            await using var conn = new NpgsqlConnection(_connectionString);
+            return await conn.QueryFirstOrDefaultAsync<BatchRun>(sql, new { BatchId = batchId });
+        }
+
+        public async Task<IEnumerable<BatchRun>> GetAllAsync()
+        {
+            const string sql = @"
+            SELECT
+                batch_id AS BatchId,
+                group_company_cd AS GroupCompanyCd
+                FROM batch_run;
+            ";
+
+            await using var connection = new NpgsqlConnection(_connectionString);
+            return await connection.QueryAsync<BatchRun>(sql);
+        }
+
+        public async Task UpdateAsync(BatchRun entity)
+        {
+            const string sql = @"
+                UPDATE batch_run
+                SET
+                    batch_status = @BatchStatus,
+                    counts_json  = COALESCE(@CountsJson::jsonb, counts_json),
+                    upd_at       = @UpdAt,
+                    started_at   = COALESCE(@StartedAt, started_at)
+                WHERE batch_id = @BatchId;
+            ";
+
+            await using var connection = new NpgsqlConnection(_connectionString);
+            await connection.ExecuteAsync(sql, new
+            {
+                entity.BatchStatus,
+                entity.CountsJson,  // 这里仍然是string（JSON文本），由SQL侧强转为jsonb
+                entity.UpdAt,
+                entity.StartedAt,
+                entity.BatchId
+            });
+        }
+
+
+
     }
 }

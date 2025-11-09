@@ -110,7 +110,7 @@ namespace ProductDataIngestion.Repositories
                 usage as Usage,
                 table_type_cd as TableTypeCd,
                 is_golden_product as IsGoldenProduct,
-                is_golden_attr as IsGoldenAttrEav,
+                is_golden_eav as IsGoldenEav,
                 is_active as IsActive,
                 attr_remarks as AttrRemarks,
                 cre_at as CreAt,

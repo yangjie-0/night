@@ -76,6 +76,8 @@ namespace ProductDataIngestion.Models
         /// </summary>
         public string? DataType { get; set; }
 
+        // public string QualityStatus { get; set; } = string.Empty;
+
         /// <summary>
         /// 品質フラグ（例: "OK", "WARN", "NG"）。デフォルトは "OK"。
         /// </summary>

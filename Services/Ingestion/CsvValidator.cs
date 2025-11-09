@@ -1,59 +1,53 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using ProductDataIngestion.Models;
 
 namespace ProductDataIngestion.Services
 {
     /// <summary>
-    /// CSV検証ロジッククラス
-    /// IngestServiceから検証ロジックを分離
+    /// CSV検証ロジッククラス  
+    /// IngestService / CsvTempIngestionService から呼び出され、  
+    /// 列数・必須項目・空行などの共通検証を担当する。
     /// </summary>
     public class CsvValidator
     {
         /// <summary>
-        /// 列マッピング検証
-        /// column_seq = 0: 公司コード注入 (CSV列不要)
-        /// column_seq > 0: CSV列番号 (1始まり、配列インデックスは -1 が必要)
-        /// 重要: is_required=true の必須列のみ検証し、オプション列は CSV に存在しなくても許可
+        /// CSVファイルの列数を基に、必須列不足を検証する。
+        /// 中文说明：根据 CSV 实际列数，检查 m_data_import_d 中的必填列是否超出范围。
         /// </summary>
-        public void ValidateColumnMappings(List<MDataImportD> importDetails, string[] headers)
+        public void ValidateColumnCount(List<MDataImportD> importDetails, int columnCount)
         {
             var errors = new List<string>();
-            var requiredCount = 0;
 
-            foreach (var detail in importDetails
-                .Where(d => d.IsRequired)
-                .OrderBy(d => d.ColumnSeq))
+            // is_required=true の列のみをチェック
+            foreach (var detail in importDetails.Where(d => d.IsRequired))
             {
-                // column_seq = 0 は公司コード注入なのでスキップ
-                if (detail.ColumnSeq == 0) continue;
-
-                // column_seq > 0 は CSV列番号 (1始まり)、配列インデックスは -1
-                int csvIndex = detail.ColumnSeq - 1;
-
-                // CSV範囲外チェック: 必須列のみエラーとする
-                if (csvIndex < 0 || csvIndex >= headers.Length)
+                // 定義された column_seq が CSV実際の列数を超えている場合
+                if (detail.ColumnSeq > columnCount)
                 {
-                    // 分かりやすいのエラーメッセージ
                     string attrInfo = !string.IsNullOrEmpty(detail.AttrCd)
                         ? $"[{detail.AttrCd}]"
                         : $"[{detail.TargetColumn}]";
-                    errors.Add($"必須列が見つかりません: {detail.ColumnSeq}列目 {attrInfo}。CSVファイルには{headers.Length}列しかありません。");
-                    requiredCount++;
+
+                    errors.Add($"必須列が不足しています: 定義 {detail.ColumnSeq}列目 {attrInfo}、CSV推定列数={columnCount}");
                 }
             }
-
-            Console.WriteLine($"列マッピング検証完了: CSV列数={headers.Length}, 必須列エラー={requiredCount}");
 
             if (errors.Any())
             {
                 throw new IngestException(
                     ErrorCodes.MISSING_COLUMN,
-                    $"不正なCSVファイル：必須列が不足しています。CSV列数: {headers.Length}\n{string.Join("\n", errors)}"
+                    $"CSVファイルの列数が不足しています。定義に対して列が足りません。\n{string.Join("\n", errors)}"
                 );
             }
+
+            Console.WriteLine($"列数検証完了: 推定列数={columnCount}, 必須列エラー={errors.Count}");
         }
 
         /// <summary>
-        /// 必須フィールドの検証
+        /// 必須フィールドの検証  
+        /// 中文说明：检查一行中是否存在空的必填字段。
         /// </summary>
         public void ValidateRequiredFields(List<string> requiredFieldErrors, long dataRowNumber, int physicalLine)
         {
@@ -69,7 +63,8 @@ namespace ProductDataIngestion.Services
         }
 
         /// <summary>
-        /// 空レコードの検証
+        /// 空レコードの検証  
+        /// 中文说明：检测是否为空行。
         /// </summary>
         public void ValidateEmptyRecord(string[]? record, long dataRowNumber, int physicalLine)
         {

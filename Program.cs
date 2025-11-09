@@ -1,146 +1,165 @@
-using ProductDataIngestion.Services; // サービス層（業務ロジック）を利用するため
-using ProductDataIngestion.Repositories; // リポジトリ層（DB操作）を利用するため
-using ProductDataIngestion.Models; // エラーコード定数を利用するため
-using Microsoft.Extensions.Configuration;  // 設定ファイル（JSONなど）を読み込むためのライブラリ
+﻿using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Dapper;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Npgsql;
+using ProductDataIngestion.Models;
+using ProductDataIngestion.Repositories;
+using ProductDataIngestion.Repositories.Company;
+using ProductDataIngestion.Repositories.Interfaces;
+using ProductDataIngestion.Services;
+using ProductDataIngestion.Services.Upsert;
+using ProductDataIngestion.Utils;
 
-/// <summary>
-/// 商品データ取込システムのメインプログラム
-/// CSVファイルから商品データを読み取り、データベースに取り込む処理を行う
-/// </summary>
 class Program
 {
-    /// <summary>
-    /// プログラムのエントリーポイント
-    /// 1. 設定ファイルの読み込み
-    /// 2. CSVファイルの存在確認
-    /// 3. データベースの接続確認
-    /// 4. CSVデータ取込処理を実行
-    /// </summary>
     static async Task Main(string[] args)
     {
-        // コンソール出力をUTF-8に設定
-        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
+        Console.OutputEncoding = Encoding.UTF8;
         Console.WriteLine("< 商品データ取込システム >");
+
+        string? batchId = null;
+        UpsertService? upsertService = null;
+        IServiceScope? serviceScope = null;
 
         try
         {
-            // 設定ファイル (appsettings.json) と環境変数を読み込む
             var configuration = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetCurrentDirectory())  
+                .SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .AddEnvironmentVariables()
                 .Build();
 
-            // 必須設定を取得する（未設定ならエラー）
-            // CsvImport:DefaultFilePath → 取込対象CSVファイルのパス
-            // DefaultConnection → データベースの接続文字列
-            string csvFilePath = configuration.GetValue<string>("CsvImport:DefaultFilePath") 
-                ?? throw new ArgumentException("エラー: CSVファイルパスが未設定です (appsettings.jsonを確認)");
-            string connectionString = configuration.GetConnectionString("DefaultConnection") 
-                ?? throw new ArgumentException("エラー: データベース接続情報が未設定です (appsettings.jsonを確認)");
-            
-            // 取込対象の設定（固定値）
-            string groupCompanyCd = "KM";// 会社コード（固定）
-            string targetEntity = "EVENT";// 対象データ（商品）
+            string csvFilePath = configuration.GetValue<string>("CsvImport:DefaultFilePath")
+                ?? throw new ArgumentException("エラー: CSVファイルパスが未設定です (appsettings.json を確認してください)。");
+            string connectionString = configuration.GetConnectionString("DefaultConnection")
+                ?? throw new ArgumentException("エラー: データベース接続情報が未設定です (appsettings.json を確認してください)。");
 
-            //// CSVファイルが存在するかをチェック
+            const string groupCompanyCd = "KM";
+            const string targetEntity = "PRODUCT";
+
             if (!File.Exists(csvFilePath))
             {
                 Console.WriteLine($"エラー: ファイルが見つかりません: {csvFilePath}");
-                return;// ファイルがない場合は終了  
+                return;
             }
 
-            // ▼ データ取込設定（マッピング情報など）を取得し、部分内容を表示する
-            try
-            {
-                // DBから設定を取得するためのリポジトリとサービスを作成
-                var dataRepository = new DataImportRepository(connectionString);
-                var dataService = new DataImportService(dataRepository);
-                // 設定を検索するためのキーを作成
-                string usageNm = $"{groupCompanyCd}-PRODUCT";
-                Console.WriteLine($"\n--- 取込設定の読み込み (用途: {usageNm}) ---");
-                // 設定情報（プロファイル）を取得
-                var setting = await dataService.GetImportSettingAsync(groupCompanyCd, usageNm);
-                // 設定の概要を表示
-                Console.WriteLine($"ProfileId: {setting.ProfileId}, 区切り文字: '{setting.Delimiter}', ヘッダー行: {setting.HeaderRowIndex}");
-
-                // 列マッピング設定の最初の10件だけ表示して内容を確認する
-                Console.WriteLine($"\n--- 列マッピング設定（最初の10件） ---");
-                var details = await dataService.GetImportDetailsAsync(setting.ProfileId);
-                int take = Math.Min(10, details.Count);
-                if (take == 0)
-                {
-                    Console.WriteLine("(マッピング設定が見つかりません)");
-                }
-                else
-                {
-                    // 各列の設定を出力
-                    for (int i = 0; i < take; i++)
-                    {
-                        var d = details[i];
-                        Console.WriteLine($"{i + 1}. ColumnSeq={d.ColumnSeq}, ProjectionKind={d.ProjectionKind}, TargetColumn={d.TargetColumn}, AttrCd={d.AttrCd}, IsRequired={d.IsRequired}, TransformExpr={d.TransformExpr}");
-                    }
-                    // 10件以上ある場合に残り件数を表示
-                    if (details.Count > take)
-                        Console.WriteLine($"... 他に {details.Count - take} 件の設定があります");
-                }
-            }
-            catch (Exception ex)
-            {
-                // 設定の読み込みでエラーがあっても処理を続行する
-                Console.WriteLine($"設定読み込みエラー: {ex.Message}");
-                Console.WriteLine("取込処理を続行します\n");
-            }
-
-             // ▼ 各種リポジトリ（DB操作クラス）を初期化
-            var batchRepository = new BatchRepository(connectionString); // バッチ情報を扱う
-            var productRepository = new ProductRepository(connectionString); // 商品データを扱う
-
-            // ▼ CSV取込サービスを作成
-            // IngestService は CSVの読み込み・変換・DB保存などを担当
+            var batchRepository = new BatchRepository(connectionString);
+            var productRepository = new ProductRepository(connectionString);
             var ingestService = new IngestService(connectionString, batchRepository, productRepository);
-            //CSVを処理し、結果のバッチIDを受け取る
-            string batchId = await ingestService.ProcessCsvFileAsync(csvFilePath, groupCompanyCd, targetEntity);
-            
-            // ▼ 実行結果を出力
+
+            batchId = await ingestService.ProcessCsvFileAsync(csvFilePath, groupCompanyCd, targetEntity);
             Console.WriteLine($"\nバッチID: {batchId}");
-            Console.WriteLine("\n処理が完了しました。");
+
+            using IHost host = Host.CreateDefaultBuilder(args)
+                .ConfigureServices((context, services) =>
+                {
+                    services.AddScoped<IClProductAttrRepository>(_ => new ClProductAttrRepository(connectionString));
+                    services.AddScoped<IAttributeDefinitionRepository>(_ => new AttributeDefinitionRepository(connectionString));
+                    services.AddScoped<ICleansePolicyRepository>(_ => new CleansePolicyRepository(connectionString));
+                    services.AddScoped<IRecordErrorRepository>(_ => new RecordErrorRepository(connectionString));
+                    services.AddScoped<IRefTableMapRepository>(_ => new RefTableMapRepository(connectionString));
+                    services.AddScoped<IBrandSourceMapRepository>(_ => new BrandSourceMapRepository(connectionString));
+                    services.AddScoped<IMBrandGRepository>(_ => new MBrandGRepository(connectionString));
+                    services.AddScoped<ICompanyRepository>(_ => new CompanyRepository(connectionString));
+                    services.AddScoped<IMCompanyRepository>(_ => new MCompanyRepository(connectionString));
+                    services.AddScoped<IAttrSourceMapRepository>(_ => new AttrSourceMapRepository(connectionString));
+                    services.AddScoped<ICategorySourceMapRepository>(_ => new CategorySourceMapRepository(connectionString));
+                    services.AddScoped<IMCategoryGRepository>(_ => new MCategoryGRepository(connectionString));
+                    services.AddScoped<IMListItemGRepository>(_ => new MListItemGRepository(connectionString));
+                    services.AddScoped<IRefResolverRepository>(_ => new RefResolverRepository(connectionString));
+                    services.AddScoped<IMCleanseRuleSetRepository>(_ => new MCleanseRuleSetRepository(connectionString));
+                    services.AddScoped<IBatchRepository>(_ => new BatchRepository(connectionString));
+                    services.AddScoped<IUpsertRepository>(_ => new UpsertRepository(connectionString));
+                    services.AddScoped<IProductManagementRepository>(_ => new ProductManagementRepository());
+
+                    services.AddScoped<CleansingService>();
+                    services.AddScoped<UpsertService>();
+                })
+                .Build();
+
+            serviceScope = host.Services.CreateScope();
+            var provider = serviceScope.ServiceProvider;
+
+            var cleansingService = provider.GetRequiredService<CleansingService>();
+            var definitionRepo = provider.GetRequiredService<IAttributeDefinitionRepository>();
+            var firstDefinition = (await definitionRepo.GetAllAttrDefinitionAsync()).FirstOrDefault()
+                ?? new AttributeDefinition { AttrCd = "DUMMY", DataType = "TEXT" };
+
+            Logger.Info("\n--- クレンジング処理を開始します ---");
+            await cleansingService.InitializeAsync();
+            await cleansingService.StartCleanseAsync(batchId);
+            await cleansingService.ProcessAllAttributesAsync(batchId);
+            Logger.Info("--- クレンジング処理が完了しました ---");
+
+            upsertService = provider.GetRequiredService<UpsertService>();
+            Logger.Info("\n--- UPSERT処理を開始します ---");
+            await upsertService.ExecuteAsync(batchId);
+            Logger.Info("--- UPSERT処理が完了しました ---");
+
+            await host.StopAsync();
+
+            Console.WriteLine("\n全ての処理が完了しました。");
         }
-        catch (Npgsql.NpgsqlException ex)
+        catch (NpgsqlException ex)
         {
-            // データベース接続エラーの場合は専用のメッセージを表示
-            Console.WriteLine($"\nデータベース接続エラーが発生しました:");
+            Console.WriteLine("\nデータベース接続エラーが発生しました:");
             Console.WriteLine($"エラーコード: {ex.ErrorCode}");
             Console.WriteLine($"メッセージ: {ex.Message}");
-            Console.WriteLine("接続文字列とデータベースの状態を確認してください。");
-            Console.WriteLine($"\nスタックトレース:\n{ex.StackTrace}");
-            
-            // 設計書で定義されたDB_ERRORコードを使用してIngestExceptionでラップする
+            Console.WriteLine($"スタックトレース:\n{ex.StackTrace}");
+
             throw new IngestException(
-                ErrorCodes.DB_ERROR, 
-                "データベースに接続できません。設定を確認してください。", 
-                ex,  // innerException
-                $"ErrorCode: {ex.ErrorCode}" // rawFragment
-            );
+                ErrorCodes.DB_ERROR,
+                "データベースに接続できません。設定を確認してください。",
+                ex,
+                $"ErrorCode: {ex.ErrorCode}");
         }
         catch (Exception ex)
         {
-            // その他の予期しないエラーの場合
-            Console.WriteLine($"\n予期しないエラーが発生しました:");
+            if (batchId != null)
+            {
+                try
+                {
+                    if (upsertService != null)
+                    {
+                        await upsertService.MarkBatchFailedAsync(batchId);
+                    }
+                    else if (serviceScope != null)
+                    {
+                        var fallback = serviceScope.ServiceProvider.GetRequiredService<UpsertService>();
+                        await fallback.MarkBatchFailedAsync(batchId);
+                    }
+                }
+                catch (Exception markEx)
+                {
+                    Console.WriteLine($"UPSERT異常終了処理で追加エラー: {markEx.Message}");
+                }
+            }
+
+            Console.WriteLine("\n予期しないエラーが発生しました:");
             Console.WriteLine($"メッセージ: {ex.Message}");
             Console.WriteLine($"スタックトレース:\n{ex.StackTrace}");
-            
-            // 予期しないエラーの場合もDB_ERRORでラップする（既にIngestExceptionの場合を除く）
+
             if (ex is not IngestException)
             {
                 throw new IngestException(
                     ErrorCodes.DB_ERROR,
                     $"予期しないデータベースエラーが発生しました: {ex.Message}",
-                    ex // innerException
-                );
+                    ex);
             }
             throw;
         }
+        finally
+        {
+            serviceScope?.Dispose();
+        }
+
         Console.WriteLine("\nEnterキーを押して終了してください...");
         Console.ReadLine();
     }

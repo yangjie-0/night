@@ -167,20 +167,26 @@ namespace ProductDataIngestion.Repositories
         public async Task SaveRecordErrorsAsync(List<RecordError> errors)
         {
             if (errors.Count == 0) return;
-
             using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            // record_error テーブルの主キーは batch_id のみなので、
-            // 複数エラーを保存するためにはテーブル構造を変更するか、
-            // 最初のエラーのみを保存する必要があります
-            // ここでは最初のエラーのみを保存します
-            var firstError = errors.First();
+            // 新しいスキーマでは error_id が主キーになったため、
+            // 複数のエラーをそのまま挿入できるように全件を挿入する
+            // (必要なら ON CONFLICT 句で重複時の挙動を調整してください)
+
+            // Ensure each error has an ErrorId and timestamps
+            foreach (var e in errors)
+            {
+                if (e.ErrorId == Guid.Empty)
+                    e.ErrorId = Guid.NewGuid();
+
+                if (e.CreAt == default) e.CreAt = DateTime.UtcNow;
+                e.UpdAt = DateTime.UtcNow;
+            }
 
             var sql = @"
                 INSERT INTO record_error (
-                    batch_id, step, record_ref, error_cd, error_detail, raw_fragment,
-                    cre_at, upd_at
+                    error_id, batch_id, step, record_ref, error_cd, error_detail, raw_fragment, cre_at, upd_at
                 ) VALUES (
                     @BatchId, @Step, @RecordRef, @ErrorCd, @ErrorDetail, @RawFragment,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP

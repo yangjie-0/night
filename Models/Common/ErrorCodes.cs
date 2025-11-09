@@ -110,5 +110,34 @@ namespace ProductDataIngestion.Models
         public const string LOCAL_MOVE_FAILED = "LOCAL_MOVE_FAILED";
 
         #endregion
+
+        #region UPSERTエラー
+
+        /// <summary>
+        /// 商品識別(ident)失敗
+        /// </summary>
+        public const string IDENT_FAILED = "IDENT_FAILED";
+
+        /// <summary>
+        /// 固定カラム更新失敗
+        /// </summary>
+        public const string FIXED_COL_UPDATE_FAILED = "FIXED_COL_UPDATE_FAILED";
+
+        /// <summary>
+        /// EAV同期失敗
+        /// </summary>
+        public const string EAV_SYNC_FAILED = "EAV_SYNC_FAILED";
+
+        /// <summary>
+        /// 識別キー不足などによるスキップ
+        /// </summary>
+        public const string UPSERT_KEY_MISSING = "UPSERT_KEY_MISSING";
+
+        /// <summary>
+        /// 未定義のUPSERTエラー
+        /// </summary>
+        public const string UPSERT_UNKNOWN_ERROR = "UPSERT_UNKNOWN_ERROR";
+
+        #endregion
     }
 }

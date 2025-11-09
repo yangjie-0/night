@@ -13,5 +13,8 @@ namespace ProductDataIngestion.Repositories.Interfaces
 
         // バッチIDでバッチ実行情報を取得
         Task<BatchRun?> GetBatchRunByIdAsync(string batchId);
+        Task<BatchRun?> GetByBatchIdAsync(string batchId);
+        Task<IEnumerable<BatchRun>> GetAllAsync();
+        Task UpdateAsync(BatchRun entity);
     }
 }
